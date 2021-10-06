@@ -38,7 +38,7 @@ optimization = {'cse_global': True,
 lbm_params = {'stencil': stencil,
               'method': 'cumulant',
               'relaxation_rate': omega,
-              'compressible': True}
+              'compressible': False}
 
 lbm_update_rule = create_lb_update_rule(optimization=optimization,
                                         output=output,

@@ -1,3 +1,3 @@
-# Cerebral aneurysm modelling using the Lattice Boltzmann method
+#Cerebral aneurysm modelling using the Lattice Boltzmann method
 
-* This is the main repository for my master thesis, on different possible collision operators in the lattice Boltzmann method
+* This is the main repository for my master thesis, on different possible collision operators in the lattice Boltzmann method using the LBM package waLBerla.
