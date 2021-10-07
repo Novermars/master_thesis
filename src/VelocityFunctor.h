@@ -15,7 +15,6 @@ using namespace walberla;
 
 class VelocityFunctor
 {
-
     const Vector3<real_t> velocity_;
     const real_t period_;
     const real_t height_;

@@ -1,9 +1,11 @@
 import sympy as sp
 import pystencils as ps
 
+from lbmpy import LBMConfig, LBMOptimisation, LBStencil, Method, Stencil
+
 from lbmpy.creationfunctions import create_lb_update_rule
 from lbmpy.macroscopic_value_kernels import macroscopic_values_setter
-from lbmpy.boundaries import NoSlip
+from lbmpy.boundaries import NoSlip, SimpleExtrapolationOutflow, UBB
 
 from pystencils_walberla import CodeGeneration, generate_sweep, generate_pack_info_from_kernel
 from lbmpy_walberla import generate_boundary
@@ -15,6 +17,7 @@ from lbmpy_walberla import generate_boundary
 
 stencil = 'D3Q27'
 omega = sp.Symbol('omega')
+ubb = sp.symbols('ubbX, ubbY, ubbZ')
 layout = 'fzyx'
 
 #   PDF Fields
@@ -62,7 +65,7 @@ pdfs_setter = macroscopic_values_setter(lbm_method,
 #   =====================
 
 with CodeGeneration() as ctx:
-    target = 'cpu'
+    target = ps.Target.CPU
 
     #   LBM Sweep
     generate_sweep(ctx, "CumulantMRTSweep", lbm_update_rule, field_swaps=[(pdfs, pdfs_tmp)], target=target)
@@ -72,3 +75,15 @@ with CodeGeneration() as ctx:
 
     #   Macroscopic Values Setter
     generate_sweep(ctx, "InitialPDFsSetter", pdfs_setter, target=target)
+
+    #   NoSlip Boundary
+    generate_boundary(ctx, "CumulantMRTNoSlip", NoSlip(), lbm_method, target=target)
+
+    # UBB with constant velocity
+    generate_boundary(ctx, "CumulantMRTSimpleUBB", UBB(ubb), lbm_method, target=target)
+
+    stencil2 = LBStencil(Stencil.D3Q27)
+    outflow = SimpleExtrapolationOutflow(stencil2[4], stencil)
+
+    # Outflow
+    generate_boundary(ctx, "CumulantMRTOutflow", outflow, lbm_method, target=target)
