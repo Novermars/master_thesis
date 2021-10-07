@@ -30,19 +30,22 @@ uint_t const FieldGhostLayers = uint_t(1);
  * We have four different kind of cells:
  * 1) Fluid cells
  * 2) Boundary cells with no-slip behavior
- * 3) Inflow boundary cells where we have a periodic velocity boundary condition
+ * 3) Inflow boundary cells where we have a velocity boundary condition
  * 4) Outflow boundary cells where we have an extrapolated pressure boundary conditon
  */
 FlagUID const FluidFlagUID("Fluid Flag");
 FlagUID const NoSlipFlagUID("NoSlip Flag");
+FlagUID const SimpleUBBFlagUID("SimpleUBB Flag");
 FlagUID const DynamicUBBFlagUID("DynamicUBB Flag");
 FlagUID const OutletFlagUID("Outlet Flag");
 
 using NoSlip_T           = lbm::NoSlip<LatticeModel_T, flag_t>;
+using SimpleUBB_T        = lbm::SimpleUBB< LatticeModel_T, flag_t >;
 using DynamicUBB_T       = lbm::DynamicUBB<LatticeModel_T, flag_t, VelocityFunctor>;
 using Outlet_T           = lbm::Outlet<LatticeModel_T, FlagField_T>;
 
-using BoundaryHandling_T = BoundaryHandling<FlagField_T, Stencil_T, NoSlip_T, DynamicUBB_T, Outlet_T>;
+using BoundaryHandling_T = BoundaryHandling<FlagField_T, Stencil_T, NoSlip_T, SimpleUBB_T, Outlet_T>;
+//using BoundaryHandling_T = BoundaryHandling<FlagField_T, Stencil_T, NoSlip_T, DynamicUBB_T, Outlet_T>;
 
 /*
  * Class that implements our custom boundary handling
@@ -78,7 +81,7 @@ BoundaryHandling_T* MyBoundaryHandling::operator()(IBlock* const block,
 
     real_t height = domainSize[1];
 
-    VelocityFunctor velocity(maxInflowVelocity_, period_, height);
+    //VelocityFunctor velocity(maxInflowVelocity_, period_, height);
 
     WALBERLA_ASSERT_NOT_NULLPTR(block)
 
@@ -90,8 +93,9 @@ BoundaryHandling_T* MyBoundaryHandling::operator()(IBlock* const block,
     BoundaryHandling_T* handling = new BoundaryHandling_T(
             "Boundary Handling", flagField, fluidFlag,
             NoSlip_T("NoSlip", NoSlipFlagUID, pdfField),
-            DynamicUBB_T("DynamicUBB", DynamicUBBFlagUID, pdfField, timeTracker_, storage->getLevel(*block), velocity,
-                        block->getAABB()),
+            SimpleUBB_T("SimpleUBB", SimpleUBBFlagUID, pdfField, maxInflowVelocity_),
+            /*DynamicUBB_T("DynamicUBB", DynamicUBBFlagUID, pdfField, timeTracker_, storage->getLevel(*block), velocity,
+                        block->getAABB()),*/
             Outlet_T("Outlet", OutletFlagUID, pdfField, flagField, fluidFlag)
         );
 
