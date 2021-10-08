@@ -9,7 +9,7 @@ Parameters
 
 DomainSetup
 {
-   meshFile         AN181_colored_faces2.obj;
+   meshFile         AN181_colored_faces.obj;
    dx               1;
    cellsPerBlock    < 16, 16, 16 >;
 }
