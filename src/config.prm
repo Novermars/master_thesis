@@ -2,14 +2,14 @@ Parameters
 {
 	omega           1.8;
 	initialVelocity < 0.1, 0, 0 >;
-	timesteps       5000;
+	timesteps       50;
 	remainingTimeLoggerFrequency 3.0; // in seconds
     VTKwriteFrequency2 = 100;
 }
 
 DomainSetup
 {
-   meshFile         AN181_colored_faces.obj;
+   meshFile         AN181_colored_faces2.obj;
    dx               1;
    cellsPerBlock    < 16, 16, 16 >;
 }

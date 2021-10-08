@@ -158,16 +158,53 @@ int main(int argc, char* argv[])
 
     BlockDataID velocityFieldId = field::addToStorage< VectorField_T >(blocks, "velocity", real_c(0.0), field::fzyx);
     BlockDataID flagFieldId     = field::addFlagFieldToStorage< FlagField_T >(blocks, "flag field");
-
-    BlockDataID pdfFieldId = field::addToStorage< PdfField_T >(blocks, "pdf field", real_c(1.0), field::fzyx);
-    blockforest::communication::UniformBufferedScheme<Stencil_T> communication(blocks);
+    BlockDataID pdfFieldId      = field::addToStorage< PdfField_T >(blocks, "pdf field", real_c(0.0), field::fzyx);
 
     pystencils::CumulantMRTSweep CumulantMRTSweep(pdfFieldId, velocityFieldId, parameters.omega_);
 
+    // Register which cells have a NoSlip boundary
+    NoSlip_T noSlip(blocks, pdfFieldId);
+    noSlip.fillFromFlagField<FlagField_T>(blocks, flagFieldId, FlagUID("NoSlip"), FluidFlagUID);
+    mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapperNoSlip(
+        mesh::BoundaryInfo(mesh::BoundaryInfo(BoundaryUID("NoSlip")))
+    );
+    colorToBoundaryMapperNoSlip.set(
+        mesh::TriangleMesh::Color(255, 255, 255),
+        mesh::BoundaryInfo(BoundaryUID("NoSlip"))
+    );
+
+    // Register which cells are the inflow
+    SimpleUBB_T simpleUBB(blocks, pdfFieldId, 1.0, 1.0, 1.0);
+    simpleUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, FlagUID("SimpleUBB"), FluidFlagUID);
+    mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapperSimpleUBB(
+        mesh::BoundaryInfo(mesh::BoundaryInfo(BoundaryUID("SimpleUBB")))
+    );
+    colorToBoundaryMapperSimpleUBB.set(
+        mesh::TriangleMesh::Color(255, 0, 12),
+        mesh::BoundaryInfo(BoundaryUID("SimpleUBB"))
+    );
+    // Register which cells are the outflow
+    Outflow_T outflow(blocks, pdfFieldId);
+    outflow.fillFromFlagField<FlagField_T>(blocks, flagFieldId, FlagUID("Outflow"), FluidFlagUID);
+    mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapperOutflow(
+        mesh::BoundaryInfo(mesh::BoundaryInfo(BoundaryUID("Outflow")))
+    );
+    colorToBoundaryMapperOutflow.set(
+        mesh::TriangleMesh::Color(0, 42, 255),
+        mesh::BoundaryInfo(BoundaryUID("Outflow"))
+    );
+
+    SweepTimeloop timeloop(blocks->getBlockStorage(), parameters.timeSteps_);
+
+    blockforest::communication::UniformBufferedScheme<Stencil_T> communication(blocks);
     communication.addPackInfo(make_shared< PackInfo_T >(pdfFieldId));
 
-    NoSlip_T noSlip(blocks, pdfFieldId);
-    SimpleUBB_T simpleUBB(blocks, pdfFieldId, 1.0, 1.0, 1.0);
-    Outflow_T outflow(blocks, pdfFieldId);
+    timeloop.add() << BeforeFunction(communication, "communication") << Sweep(noSlip) << Sweep(simpleUBB) << Sweep(outflow);
+    timeloop.add() << Sweep(CumulantMRTSweep);
+
+    // Time logger
+    timeloop.addFuncAfterTimeStep(timing::RemainingTimeLogger(timeloop.getNrOfTimeSteps(), parameters.remainingTimeLoggerFrequency_),
+                                 "remaining time logger");
+    timeloop.run();
     std::cout << "Test succesful\n";
 }
