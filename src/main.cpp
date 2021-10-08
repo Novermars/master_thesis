@@ -160,7 +160,7 @@ int main(int argc, char* argv[])
     BlockDataID flagFieldId     = field::addFlagFieldToStorage< FlagField_T >(blocks, "flag field");
     BlockDataID pdfFieldId      = field::addToStorage< PdfField_T >(blocks, "pdf field", real_c(0.0), field::fzyx);
 
-    pystencils::CumulantMRTSweep CumulantMRTSweep(pdfFieldId, velocityFieldId, parameters.omega_);
+    pystencils::CumulantMRTSweep cumulantMRTSweep(pdfFieldId, velocityFieldId, parameters.omega_);
 
     // Register which cells have a NoSlip boundary
     NoSlip_T noSlip(blocks, pdfFieldId);
@@ -200,7 +200,7 @@ int main(int argc, char* argv[])
     communication.addPackInfo(make_shared< PackInfo_T >(pdfFieldId));
 
     timeloop.add() << BeforeFunction(communication, "communication") << Sweep(noSlip) << Sweep(simpleUBB) << Sweep(outflow);
-    timeloop.add() << Sweep(CumulantMRTSweep);
+    timeloop.add() << Sweep(cumulantMRTSweep);
 
     // Time logger
     timeloop.addFuncAfterTimeStep(timing::RemainingTimeLogger(timeloop.getNrOfTimeSteps(), parameters.remainingTimeLoggerFrequency_),

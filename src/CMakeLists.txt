@@ -13,6 +13,6 @@ waLBerla_generate_target_from_python(NAME        generate_cumulant_lbm
 
 waLBerla_add_executable(NAME    aneurysm_simulation
                         FILES   main.cpp
-                        DEPENDS generate_cumulant_lbm blockforest boundary core field lbm mesh stencil timeloop vtk
+                        DEPENDS generate_cumulant_lbm geometry domain_decomposition blockforest boundary core field lbm mesh stencil timeloop vtk
                        )
 
