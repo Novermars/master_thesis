@@ -25,9 +25,8 @@
 #include "mesh/boundary/BoundaryUIDFaceDataSource.h"
 #include "mesh/boundary/ColorToBoundaryMapper.h"
 
-#include "CumulantMRTPackInfo.h"
-#include "CumulantMRTSweep.h"
-#include "InitialPDFsSetter.h"
+
+//#include "InitialPDFsSetter.h"
 //#include "BoundaryHandling.h"
 #include "aliases.h"
 #include "Parameters.h"
@@ -82,6 +81,11 @@ void vertexToFaceColor(Mesh& mesh, const Mesh::Color& defaultColor)
     }
 }
 
+/* Helper function to construct a Parameters object
+ * All field have public visibility and hence can be adressed
+ * directly
+ */
+
 Parameters constructParameters(std::shared_ptr<Config> config)
 {
     auto parameters = config->getOneBlock("Parameters");
@@ -108,7 +112,12 @@ Parameters constructParameters(std::shared_ptr<Config> config)
                       remainingTimeLoggerFrequency, meshFile, omega);
 }
 
-std::shared_ptr<Mesh> readMesh(const std::string& fileName)
+/* Loads the mesh from the file including the nonstandard vertex colors
+ * Then it is broadcasted over the possible MPI processes
+ * Finally, we convert the vertex colors to face colors as waLBerla
+ * expects it
+ */
+std::shared_ptr<Mesh> readAndColorMesh(const std::string& fileName)
 {
     // read in mesh with vertex colors on a single process and broadcast it
     auto mesh = make_shared<Mesh>();
@@ -135,31 +144,40 @@ std::shared_ptr<StructuredBlockForest> createBlockForest(Parameters const& param
                                                         )
 {
   mesh::ComplexGeometryStructuredBlockforestCreator bfc(aabb, Vector3<real_t>(params.dx_),
-                                                        mesh::makeExcludeMeshInterior(distanceOctree, params.dx_)
+                                                        mesh::makeExcludeMeshExterior(distanceOctree, params.dx_)
                                                        );
     bfc.setPeriodicity(Vector3<bool>(false));
 
     return bfc.createStructuredBlockForest(params.cellsPerBlock_);
 }
 
-
 int main(int argc, char* argv[])
 {
     walberla::Environment walberlaEnv(argc, argv);
+    // We get weird MPI errors without this line
     mpi::MPIManager::instance()->useWorldComm();
     auto config = walberlaEnv.config();
     auto parameters = constructParameters(config);
-    auto mesh = readMesh(parameters.meshFileName_);
+    auto mesh = readAndColorMesh(parameters.meshFileName_);
     auto distanceOctree = buildDistanceOctree(mesh);
     auto aabb = computeAABB(*mesh);
     auto blocks = createBlockForest(parameters, aabb, distanceOctree);
 
-    mesh::BoundarySetup boundarySetup(blocks, makeMeshDistanceFunction(distanceOctree), numGhostLayers);
+    // Let the root process write the calculated octree to a file
+    WALBERLA_ROOT_SECTION()
+    {
+        distanceOctree->writeVTKOutput("vtk_out/distanceOctree");
+    }
 
-    BlockDataID velocityFieldId = field::addToStorage< VectorField_T >(blocks, "velocity", real_c(0.0), field::fzyx);
+    // In this LBM simulation, we need three fields, which are very similar to (multi)dimensional arrays
+    // One for the macroscopic velocity values, initialized to 1.0
+    BlockDataID velocityFieldId = field::addToStorage< VectorField_T >(blocks, "velocity", real_c(1.0), field::fzyx);
+    // One for the flags which determine if a cell is part of the fluid or boundary
     BlockDataID flagFieldId     = field::addFlagFieldToStorage< FlagField_T >(blocks, "flag field");
+    // And one for the mesoscoping particule distribution function values;
     BlockDataID pdfFieldId      = field::addToStorage< PdfField_T >(blocks, "pdf field", real_c(0.0), field::fzyx);
 
+    // Does one sweep of the lbm algorithm for the fluid cells
     pystencils::CumulantMRTSweep cumulantMRTSweep(pdfFieldId, velocityFieldId, parameters.omega_);
 
     // Register which cells have a NoSlip boundary
@@ -194,6 +212,10 @@ int main(int argc, char* argv[])
         mesh::BoundaryInfo(BoundaryUID("Outflow"))
     );
 
+    /*mesh::BoundarySetup boundarySetup(blocks, makeMeshDistanceFunction(distanceOctree), numGhostLayers);
+    using BHandling = boundary::BoundaryHandling<FlagField_T, Stencil_T, NoSlip_T, SimpleUBB_T, Outflow_T>;
+    boundarySetup.setDomainCells<BHandling>(flagFieldId, mesh::BoundarySetup::INSIDE);*/
+
     SweepTimeloop timeloop(blocks->getBlockStorage(), parameters.timeSteps_);
 
     blockforest::communication::UniformBufferedScheme<Stencil_T> communication(blocks);
@@ -205,6 +227,19 @@ int main(int argc, char* argv[])
     // Time logger
     timeloop.addFuncAfterTimeStep(timing::RemainingTimeLogger(timeloop.getNrOfTimeSteps(), parameters.remainingTimeLoggerFrequency_),
                                  "remaining time logger");
+
+    if (parameters.vtkWriteFrequency_ > 0)
+   {
+      const std::string path = "vtk_out/";
+      auto vtkOutput = vtk::createVTKOutput_BlockData(*blocks, "cumulant_mrt_velocity_field", parameters.vtkWriteFrequency_, 0,
+                                                      false, path, "simulation_step", false, true, true, false, 0);
+
+      auto velWriter = make_shared< field::VTKWriter< VectorField_T > >(velocityFieldId, "Velocity");
+      vtkOutput->addCellDataWriter(velWriter);
+
+      timeloop.addFuncBeforeTimeStep(vtk::writeFiles(vtkOutput), "VTK Output");
+   }
+
     timeloop.run();
     std::cout << "Test succesful\n";
 }

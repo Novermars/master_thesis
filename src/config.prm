@@ -4,7 +4,7 @@ Parameters
 	initialVelocity < 0.1, 0, 0 >;
 	timesteps       50;
 	remainingTimeLoggerFrequency 3.0; // in seconds
-    VTKwriteFrequency2 = 100;
+    VTKwriteFrequency2 = 10;
 }
 
 DomainSetup

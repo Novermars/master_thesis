@@ -12,6 +12,8 @@
 #include "CumulantMRTNoSlip.h"
 #include "CumulantMRTOutflow.h"
 #include "CumulantMRTSimpleUBB.h"
+#include "CumulantMRTPackInfo.h"
+#include "CumulantMRTSweep.h"
 
 using LatticeModel_T         = walberla::lbm::D3Q27<walberla::lbm::collision_model::D3Q27Cumulant>; 
 using Stencil_T              = LatticeModel_T::Stencil;
