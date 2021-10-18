@@ -97,7 +97,7 @@ Parameters constructParameters(std::shared_ptr<Config> config)
 
     double remainingTimeLoggerFrequency =
         parameters.getParameter< double >("remainingTimeLoggerFrequency", 3.0); // in seconds
-    const uint_t VTKwriteFrequency = parameters.getParameter< uint_t >("VTKwriteFrequency", 1000);
+    const uint_t VTKwriteFrequency = parameters.getParameter< uint_t >("VTKwriteFrequency", 10);
 
     // read domain parameters
     auto domainParameters = config->getOneBlock("DomainSetup");
@@ -174,7 +174,7 @@ int main(int argc, char* argv[])
     BlockDataID velocityFieldId = field::addToStorage< VectorField_T >(blocks, "velocity", real_c(1.0), field::fzyx);
     // One for the flags which determine if a cell is part of the fluid or boundary
     BlockDataID flagFieldId     = field::addFlagFieldToStorage< FlagField_T >(blocks, "flag field");
-    // And one for the mesoscoping particule distribution function values;
+    // And one for the mesoscopic particule distribution function values;
     BlockDataID pdfFieldId      = field::addToStorage< PdfField_T >(blocks, "pdf field", real_c(0.0), field::fzyx);
 
     // Does one sweep of the lbm algorithm for the fluid cells
@@ -190,6 +190,7 @@ int main(int argc, char* argv[])
         mesh::TriangleMesh::Color(255, 255, 255),
         mesh::BoundaryInfo(BoundaryUID("NoSlip"))
     );
+    auto noSlipLocations = colorToBoundaryMapperNoSlip.addBoundaryInfoToMesh(*mesh);
 
     // Register which cells are the inflow
     SimpleUBB_T simpleUBB(blocks, pdfFieldId, 1.0, 1.0, 1.0);
@@ -201,6 +202,8 @@ int main(int argc, char* argv[])
         mesh::TriangleMesh::Color(255, 0, 12),
         mesh::BoundaryInfo(BoundaryUID("SimpleUBB"))
     );
+    auto simpleUBBLocations = colorToBoundaryMapperSimpleUBB.addBoundaryInfoToMesh(*mesh);
+
     // Register which cells are the outflow
     Outflow_T outflow(blocks, pdfFieldId);
     outflow.fillFromFlagField<FlagField_T>(blocks, flagFieldId, FlagUID("Outflow"), FluidFlagUID);
@@ -211,10 +214,19 @@ int main(int argc, char* argv[])
         mesh::TriangleMesh::Color(0, 42, 255),
         mesh::BoundaryInfo(BoundaryUID("Outflow"))
     );
+    auto outflowLocations = colorToBoundaryMapperOutflow.addBoundaryInfoToMesh(*mesh);
 
-    /*mesh::BoundarySetup boundarySetup(blocks, makeMeshDistanceFunction(distanceOctree), numGhostLayers);
+    
+    mesh::BoundarySetup boundarySetup(blocks, makeMeshDistanceFunction(distanceOctree), numGhostLayers);
     using BHandling = boundary::BoundaryHandling<FlagField_T, Stencil_T, NoSlip_T, SimpleUBB_T, Outflow_T>;
-    boundarySetup.setDomainCells<BHandling>(flagFieldId, mesh::BoundarySetup::INSIDE);*/
+    boundarySetup.setDomainCells<BHandling>(flagFieldId, mesh::BoundarySetup::INSIDE);
+    boundarySetup.setBoundaries< BHandling>(
+        flagFieldId, makeBoundaryLocationFunction(distanceOctree, outflowLocations), mesh::BoundarySetup::OUTSIDE);
+    boundarySetup.setBoundaries< BHandling>(
+        flagFieldId, makeBoundaryLocationFunction(distanceOctree, simpleUBBLocations), mesh::BoundarySetup::OUTSIDE);
+    boundarySetup.setBoundaries< BHandling>(
+        flagFieldId, makeBoundaryLocationFunction(distanceOctree, noSlipLocations), mesh::BoundarySetup::OUTSIDE);
+    
 
     SweepTimeloop timeloop(blocks->getBlockStorage(), parameters.timeSteps_);
 
@@ -229,16 +241,16 @@ int main(int argc, char* argv[])
                                  "remaining time logger");
 
     if (parameters.vtkWriteFrequency_ > 0)
-   {
-      const std::string path = "vtk_out/";
-      auto vtkOutput = vtk::createVTKOutput_BlockData(*blocks, "cumulant_mrt_velocity_field", parameters.vtkWriteFrequency_, 0,
-                                                      false, path, "simulation_step", false, true, true, false, 0);
+    {
+        const std::string path = "vtk_out/";
+        auto vtkOutput = vtk::createVTKOutput_BlockData(*blocks, "cumulant_mrt_velocity_field", parameters.vtkWriteFrequency_, 0,
+                                                        false, path, "simulation_step", false, true, true, false, 0);
 
-      auto velWriter = make_shared< field::VTKWriter< VectorField_T > >(velocityFieldId, "Velocity");
-      vtkOutput->addCellDataWriter(velWriter);
+        auto velWriter = make_shared< field::VTKWriter< VectorField_T > >(velocityFieldId, "Velocity");
+        vtkOutput->addCellDataWriter(velWriter);
 
-      timeloop.addFuncBeforeTimeStep(vtk::writeFiles(vtkOutput), "VTK Output");
-   }
+        timeloop.addFuncBeforeTimeStep(vtk::writeFiles(vtkOutput), "VTK Output");
+    }
 
     timeloop.run();
     std::cout << "Test succesful\n";
