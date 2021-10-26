@@ -1,16 +1,18 @@
 Parameters 
 {
 	omega           1.8;
-	initialVelocity < 0.1, 0, 0 >;
-	timesteps       50;
+	initialVelocity < 0, 0, 0>;
+	// REMARK: I removed the initial velocity, as it seems you can not use a vector
+	// to initialize the velocity field (only a scalar value)
+	timesteps       5000;
 	remainingTimeLoggerFrequency 3.0; // in seconds
-    VTKwriteFrequency 10;
+    VTKwriteFrequency 50;
 }
 
 DomainSetup
 {
-   meshFile         AN181_colored_faces.obj;
-   dx               1;
+   meshFile         AN182_colored_faces.obj;
+   dx               0.1;
    cellsPerBlock    < 16, 16, 16 >;
 }
 

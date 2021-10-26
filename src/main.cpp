@@ -24,9 +24,10 @@
 #include "mesh/boundary/BoundarySetup.h"
 #include "mesh/boundary/BoundaryUIDFaceDataSource.h"
 #include "mesh/boundary/ColorToBoundaryMapper.h"
+#include "mesh_common/MeshOperations.h"
 
 
-//#include "InitialPDFsSetter.h"
+#include "InitialPDFsSetter.h"
 //#include "BoundaryHandling.h"
 #include "aliases.h"
 #include "Parameters.h"
@@ -40,7 +41,23 @@ FlagUID const NoSlipFlagUID("NoSlip Flag");
 FlagUID const OutflowUID("Outflow Flag");
 FlagUID const InflowUID("Inflow Flag");
 
+const BoundaryUID NoSlipBoundaryUID("NoSlip Boundary");
+const BoundaryUID OutflowBoundaryUID("Outflow Boundary");
+const BoundaryUID InflowBoundaryUID("Inflow Boundary");
+
+/*
+// AN181
+std::string modelName = "AN181";
 constexpr Mesh::Color noSlipColor{255, 255, 255};
+constexpr Mesh::Color inflowColor{255, 0, 12};
+constexpr Mesh::Color outflowColor{0, 42, 255};
+*/
+
+// AN182
+//std::string modelName = "AN182";
+constexpr Mesh::Color noSlipColor{255, 255, 255};
+constexpr Mesh::Color inflowColor{255, 0, 42};
+constexpr Mesh::Color outflowColor{0, 98, 255};
 
 // Number of ghost layers
 uint_t const numGhostLayers = uint_t(1);
@@ -91,6 +108,7 @@ Parameters constructParameters(std::shared_ptr<Config> config)
     auto parameters = config->getOneBlock("Parameters");
 
     real_t omega = parameters.getParameter< real_t >("omega", real_c(1.8));
+    // TODO perhaps remove initial velocity as it can not be used as desired
     Vector3< real_t > initialVelocity =
             parameters.getParameter< Vector3< real_t > >("initialVelocity", Vector3< real_t >());
     uint_t timesteps = parameters.getParameter< uint_t >("timesteps", uint_c(1000));
@@ -143,8 +161,9 @@ std::shared_ptr<StructuredBlockForest> createBlockForest(Parameters const& param
                                                          std::shared_ptr<mesh::DistanceOctree<Mesh>> distanceOctree
                                                         )
 {
-  mesh::ComplexGeometryStructuredBlockforestCreator bfc(aabb, Vector3<real_t>(params.dx_),
-                                                        mesh::makeExcludeMeshExterior(distanceOctree, params.dx_)
+  /// REMARK: we usually leave dx here at 1 and scale the mesh instead (see below)
+  mesh::ComplexGeometryStructuredBlockforestCreator bfc(aabb, Vector3<real_t>(real_c(1)),
+                                                        mesh::makeExcludeMeshExterior(distanceOctree, real_c(1))
                                                        );
     bfc.setPeriodicity(Vector3<bool>(false));
 
@@ -159,9 +178,16 @@ int main(int argc, char* argv[])
     auto config = walberlaEnv.config();
     auto parameters = constructParameters(config);
     auto mesh = readAndColorMesh(parameters.meshFileName_);
+
+    // REMARK: scale mesh with 1/dx
+    typename Mesh::Scalar meshScaleFactor = real_c(1) / parameters.dx_;
+    mesh::scale(*mesh, Vector3<typename Mesh::Scalar>(meshScaleFactor));
+
     auto distanceOctree = buildDistanceOctree(mesh);
     auto aabb = computeAABB(*mesh);
+    aabb.scale(real_c(1.2)); // increase aabb to make sure that boundary conditions are far away from domain boundaries
     auto blocks = createBlockForest(parameters, aabb, distanceOctree);
+    WALBERLA_LOG_DEVEL_VAR(blocks->getNumberOfBlocks());
 
     // Let the root process write the calculated octree to a file
     WALBERLA_ROOT_SECTION()
@@ -171,86 +197,131 @@ int main(int argc, char* argv[])
 
     // In this LBM simulation, we need three fields, which are very similar to (multi)dimensional arrays
     // One for the macroscopic velocity values, initialized to 1.0
-    BlockDataID velocityFieldId = field::addToStorage< VectorField_T >(blocks, "velocity", real_c(1.0), field::fzyx);
+    /// REMARK: DO NOT initialize to 1.0! The velocity in LBM units must be less than 0.4 (ideally ~0.1)!
+    /// REMARK: one apparently can not initialize the other velocity directions here
+    BlockDataID velocityFieldId = field::addToStorage< VectorField_T >(blocks, "velocity", real_c(0), field::fzyx);
     // One for the flags which determine if a cell is part of the fluid or boundary
     BlockDataID flagFieldId     = field::addFlagFieldToStorage< FlagField_T >(blocks, "flag field");
     // And one for the mesoscopic particule distribution function values;
     BlockDataID pdfFieldId      = field::addToStorage< PdfField_T >(blocks, "pdf field", real_c(0.0), field::fzyx);
 
+    /// REMARK: this must not be skipped; there are two pdfFields (incl. a temporary one for pointer swapping) and both
+    /// must have meaningful initial values
+    real_t rho = real_c(1);
+    pystencils::InitialPDFsSetter pdfSetter(pdfFieldId, velocityFieldId, rho);
+
     // Does one sweep of the lbm algorithm for the fluid cells
     pystencils::CumulantMRTSweep cumulantMRTSweep(pdfFieldId, velocityFieldId, parameters.omega_);
+    for (auto blockIt = blocks->begin(); blockIt != blocks->end(); ++blockIt)
+    {
+        pdfSetter(&(*blockIt));
+    }
 
-    // Register which cells have a NoSlip boundary
+    // register flags at the flag field
+    for (auto blockIterator = blocks->begin(); blockIterator != blocks->end(); ++blockIterator) {
+        FlagField_T *flagField = blockIterator->getData<FlagField_T>(flagFieldId);
+        flagField->registerFlag(FluidFlagUID);
+        flagField->registerFlag(NoSlipFlagUID);
+        flagField->registerFlag(OutflowUID);
+        flagField->registerFlag(InflowUID);
+    }
+
+    // map boundaryUIDs to colored mesh faces
     NoSlip_T noSlip(blocks, pdfFieldId);
-    noSlip.fillFromFlagField<FlagField_T>(blocks, flagFieldId, FlagUID("NoSlip"), FluidFlagUID);
-    mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapperNoSlip(
-        mesh::BoundaryInfo(mesh::BoundaryInfo(BoundaryUID("NoSlip")))
-    );
-    colorToBoundaryMapperNoSlip.set(
-        mesh::TriangleMesh::Color(255, 255, 255),
-        mesh::BoundaryInfo(BoundaryUID("NoSlip"))
-    );
-    auto noSlipLocations = colorToBoundaryMapperNoSlip.addBoundaryInfoToMesh(*mesh);
+    SimpleUBB_T simpleUBB(blocks, pdfFieldId, -0.01, -0.01, 0.01); // WIP: values don't make sense yet
+    Outflow_T outflow(blocks, pdfFieldId, real_c(1.0));
 
-    // Register which cells are the inflow
-    SimpleUBB_T simpleUBB(blocks, pdfFieldId, 1.0, 1.0, 1.0);
-    simpleUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, FlagUID("SimpleUBB"), FluidFlagUID);
-    mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapperSimpleUBB(
-        mesh::BoundaryInfo(mesh::BoundaryInfo(BoundaryUID("SimpleUBB")))
-    );
-    colorToBoundaryMapperSimpleUBB.set(
-        mesh::TriangleMesh::Color(255, 0, 12),
-        mesh::BoundaryInfo(BoundaryUID("SimpleUBB"))
-    );
-    auto simpleUBBLocations = colorToBoundaryMapperSimpleUBB.addBoundaryInfoToMesh(*mesh);
+    mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapper =
+            mesh::ColorToBoundaryMapper<mesh::TriangleMesh>(mesh::BoundaryInfo(NoSlipBoundaryUID));
 
-    // Register which cells are the outflow
-    Outflow_T outflow(blocks, pdfFieldId);
-    outflow.fillFromFlagField<FlagField_T>(blocks, flagFieldId, FlagUID("Outflow"), FluidFlagUID);
-    mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapperOutflow(
-        mesh::BoundaryInfo(mesh::BoundaryInfo(BoundaryUID("Outflow")))
-    );
-    colorToBoundaryMapperOutflow.set(
-        mesh::TriangleMesh::Color(0, 42, 255),
-        mesh::BoundaryInfo(BoundaryUID("Outflow"))
-    );
-    auto outflowLocations = colorToBoundaryMapperOutflow.addBoundaryInfoToMesh(*mesh);
+    colorToBoundaryMapper.set(noSlipColor, mesh::BoundaryInfo(NoSlipBoundaryUID));
+    colorToBoundaryMapper.set(outflowColor, mesh::BoundaryInfo(OutflowBoundaryUID));
+    colorToBoundaryMapper.set(inflowColor, mesh::BoundaryInfo(InflowBoundaryUID));
 
-    
+    auto boundaryLocations = colorToBoundaryMapper.addBoundaryInfoToMesh(*mesh);
+
+    // print mesh with mapped boundaryUIDs
+    mesh::VTKMeshWriter<mesh::TriangleMesh> meshWriter(mesh, "meshBoundaries", 1);
+    meshWriter.addDataSource(make_shared<mesh::BoundaryUIDFaceDataSource<mesh::TriangleMesh> >(boundaryLocations));
+    meshWriter.addDataSource(make_shared<mesh::ColorFaceDataSource<mesh::TriangleMesh> >());
+    meshWriter.addDataSource(make_shared<mesh::ColorVertexDataSource<mesh::TriangleMesh> >());
+    meshWriter();
+
     mesh::BoundarySetup boundarySetup(blocks, makeMeshDistanceFunction(distanceOctree), numGhostLayers);
-    using BHandling = boundary::BoundaryHandling<FlagField_T, Stencil_T, NoSlip_T, SimpleUBB_T, Outflow_T>;
-    boundarySetup.setDomainCells<BHandling>(flagFieldId, mesh::BoundarySetup::INSIDE);
-    boundarySetup.setBoundaries< BHandling>(
-        flagFieldId, makeBoundaryLocationFunction(distanceOctree, outflowLocations), mesh::BoundarySetup::OUTSIDE);
-    boundarySetup.setBoundaries< BHandling>(
-        flagFieldId, makeBoundaryLocationFunction(distanceOctree, simpleUBBLocations), mesh::BoundarySetup::OUTSIDE);
-    boundarySetup.setBoundaries< BHandling>(
-        flagFieldId, makeBoundaryLocationFunction(distanceOctree, noSlipLocations), mesh::BoundarySetup::OUTSIDE);
-    
+
+    // set whole region inside the mesh to fluid
+    boundarySetup.setFlag<FlagField_T>(flagFieldId, FluidFlagUID, mesh::BoundarySetup::INSIDE);
+
+    // set whole region outside the mesh to no-slip
+    boundarySetup.setFlag<FlagField_T>(flagFieldId, NoSlipFlagUID, mesh::BoundarySetup::OUTSIDE);
+
+    // set outflow flag to outflow boundary
+    boundarySetup.setBoundaryFlag<FlagField_T>(flagFieldId, OutflowUID, OutflowBoundaryUID,
+                                               makeBoundaryLocationFunction(distanceOctree, boundaryLocations),
+                                               mesh::BoundarySetup::OUTSIDE);
+
+    // set inflow flag to inflow boundary
+    boundarySetup.setBoundaryFlag<FlagField_T>(flagFieldId, InflowUID, InflowBoundaryUID,
+                                               makeBoundaryLocationFunction(distanceOctree, boundaryLocations),
+                                               mesh::BoundarySetup::OUTSIDE);
+
+    noSlip.fillFromFlagField<FlagField_T>(blocks, flagFieldId, NoSlipFlagUID, FluidFlagUID);
+    simpleUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
+    outflow.fillFromFlagField<FlagField_T>(blocks, flagFieldId, OutflowUID, FluidFlagUID);
 
     SweepTimeloop timeloop(blocks->getBlockStorage(), parameters.timeSteps_);
 
     blockforest::communication::UniformBufferedScheme<Stencil_T> communication(blocks);
     communication.addPackInfo(make_shared< PackInfo_T >(pdfFieldId));
 
-    timeloop.add() << BeforeFunction(communication, "communication") << Sweep(noSlip) << Sweep(simpleUBB) << Sweep(outflow);
+    /// REMARK: never use write "timeloop.add() << Sweep(A) << Sweep(B);" (see merge request !486)
+    timeloop.add() << BeforeFunction(communication, "communication") << Sweep(noSlip);
+    timeloop.add() << Sweep(simpleUBB);
+    timeloop.add() << Sweep(outflow);
     timeloop.add() << Sweep(cumulantMRTSweep);
 
     // Time logger
     timeloop.addFuncAfterTimeStep(timing::RemainingTimeLogger(timeloop.getNrOfTimeSteps(), parameters.remainingTimeLoggerFrequency_),
                                  "remaining time logger");
 
+    // set velocity in boundary cells to zero
+    auto zeroSetterFunction = [&](IBlock* block) {
+        VectorField_T* velocityField   = block->getData< VectorField_T >(velocityFieldId);
+        FlagField_T* flagField = block->getData< FlagField_T >(flagFieldId);
+        flag_t fluidFlag = flagField->getFlag(FluidFlagUID);
+
+        WALBERLA_FOR_ALL_CELLS(
+                velIt, velocityField, flagIt, flagField,
+                if (*flagIt != fluidFlag) {
+                    velIt[0] = real_c(0);
+                    velIt[1] = real_c(0);
+                    velIt[2] = real_c(0);
+                }
+                ) // WALBERLA_FOR_ALL_CELLS
+        };
+    timeloop.add() << Sweep(zeroSetterFunction, "Zerosetter");
+
     if (parameters.vtkWriteFrequency_ > 0)
     {
         const std::string path = "vtk_out/";
+        /// REMARK: force_pvtu must be set to true; otherwise the "pvti" format is used and paraview can only display
+        /// pvti files if the domain is partitioned in blocks with a block for EVERY part of the domain; this is likely
+        /// to be not the case when using smaller dx
         auto vtkOutput = vtk::createVTKOutput_BlockData(*blocks, "cumulant_mrt_velocity_field", parameters.vtkWriteFrequency_, 0,
-                                                        false, path, "simulation_step", false, true, true, false, 0);
+                                                        true, path, "simulation_step", false, true, true, false, 0);
 
         auto velWriter = make_shared< field::VTKWriter< VectorField_T > >(velocityFieldId, "Velocity");
         vtkOutput->addCellDataWriter(velWriter);
 
         timeloop.addFuncBeforeTimeStep(vtk::writeFiles(vtkOutput), "VTK Output");
     }
+
+    // write flag field
+    auto vtkFlagField = field::createVTKOutput<FlagField_T>(flagFieldId, *blocks, "flag_field", uint_c(1), uint_c(0));
+    vtkFlagField();
+
+    // write domain decomposition
+    vtk::writeDomainDecomposition( blocks );
 
     timeloop.run();
     std::cout << "Test succesful\n";
