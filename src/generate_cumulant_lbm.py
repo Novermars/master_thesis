@@ -6,6 +6,7 @@ from lbmpy import LBMConfig, LBMOptimisation, LBStencil, Method, Stencil
 from lbmpy.creationfunctions import create_lb_update_rule
 from lbmpy.macroscopic_value_kernels import macroscopic_values_setter
 from lbmpy.boundaries import NoSlip, SimpleExtrapolationOutflow, UBB, FixedDensity
+from lbmpy_walberla.additional_data_handler import UBBAdditionalDataHandler, OutflowAdditionalDataHandler
 
 from pystencils_walberla import CodeGeneration, generate_sweep, generate_pack_info_from_kernel
 from lbmpy_walberla import generate_boundary
@@ -15,9 +16,9 @@ from lbmpy_walberla import generate_boundary
 #      General Parameters
 #   ========================
 
-stencil = 'D3Q27'
+stencil = LBStencil(Stencil.D3Q27)
 omega = sp.Symbol('omega')
-ubb = sp.symbols('ubbX, ubbY, ubbZ')
+#ubb = sp.symbols('ubbX, ubbY, ubbZ')
 layout = 'fzyx'
 
 #   PDF Fields
@@ -80,7 +81,15 @@ with CodeGeneration() as ctx:
     generate_boundary(ctx, "CumulantMRTNoSlip", NoSlip(), lbm_method, target=target)
 
     # UBB with constant velocity
-    generate_boundary(ctx, "CumulantMRTSimpleUBB", UBB(ubb), lbm_method, target=target)
+    #generate_boundary(ctx, "CumulantMRTSimpleUBB", UBB(ubb), lbm_method, target=target)
+
+    # DynamicUBB with time-dependent velocity
+    ubb_dynamic = UBB(lambda *args: None, dim=stencil.D)
+    ubb_data_handler = UBBAdditionalDataHandler(stencil, ubb_dynamic)
+
+    # UBB with user-defined velocity profile
+    generate_boundary(ctx, "CumulantMRTDynamicUBB", ubb_dynamic, lbm_method,
+                      additional_data_handler=ubb_data_handler, target=target)
 
     #stencil2 = LBStencil(Stencil.D3Q27)
     #outflow = SimpleExtrapolationOutflow(stencil2[4], stencil)

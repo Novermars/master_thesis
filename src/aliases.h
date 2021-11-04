@@ -13,14 +13,14 @@
 
 #include "CumulantMRTNoSlip.h"
 #include "CumulantMRTOutflow.h"
-#include "CumulantMRTSimpleUBB.h"
+//#include "CumulantMRTSimpleUBB.h"
+#include "CumulantMRTDynamicUBB.h"
 #include "CumulantMRTPackInfo.h"
 #include "CumulantMRTSweep.h"
 
-namespace walberla {
-    //using LatticeModel_T         = walberla::lbm::D3Q27<walberla::lbm::collision_model::D3Q27Cumulant>;
+namespace walberla 
+{
     using Stencil_T = stencil::D3Q27;
-    //using CommunicationStencil_T = LatticeModel_T::CommunicationStencil;
 
     using flag_t = walberla::uint8_t;
     using PdfField_T = walberla::field::GhostLayerField<walberla::real_t, Stencil_T::Size>;
@@ -29,12 +29,13 @@ namespace walberla {
 
     // Communication Pack Info
     using PackInfo_T = walberla::pystencils::CumulantMRTPackInfo;
+    using CumulantMRTSweep = walberla::pystencils::CumulantMRTSweep;
     using NoSlip_T = walberla::lbm::CumulantMRTNoSlip;
-    using SimpleUBB_T = walberla::lbm::CumulantMRTSimpleUBB;
+    //using SimpleUBB_T = walberla::lbm::CumulantMRTSimpleUBB;
+    using DynamicUBB_T = walberla::lbm::CumulantMRTDynamicUBB;
     using Outflow_T = walberla::lbm::CumulantMRTOutflow;
 
     using Mesh = walberla::mesh::TriangleMesh;
-
 }
 
 #endif

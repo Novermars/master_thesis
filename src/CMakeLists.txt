@@ -6,7 +6,8 @@ waLBerla_generate_target_from_python(NAME        generate_cumulant_lbm
                                      OUT_FILES   CumulantMRTSweep.cpp CumulantMRTSweep.h
 			                         CumulantMRTPackInfo.cpp CumulantMRTPackInfo.h
                         			 InitialPDFsSetter.cpp InitialPDFsSetter.h
-                                     CumulantMRTSimpleUBB.cpp CumulantMRTSimpleUBB.h 
+                                     #CumulantMRTSimpleUBB.cpp CumulantMRTSimpleUBB.h 
+                                     CumulantMRTDynamicUBB.cpp CumulantMRTDynamicUBB.h
                                      CumulantMRTOutflow.cpp CumulantMRTOutflow.h 
                                      CumulantMRTNoSlip.cpp CumulantMRTNoSlip.h 
                                     )

@@ -1,12 +1,9 @@
 Parameters 
 {
 	omega           1.8;
-	initialVelocity < 0, 0, 0>;
-	// REMARK: I removed the initial velocity, as it seems you can not use a vector
-	// to initialize the velocity field (only a scalar value)
-	timesteps       5000;
+	timesteps       5;
 	remainingTimeLoggerFrequency 3.0; // in seconds
-    VTKwriteFrequency 50;
+    VTKwriteFrequency 25;
 }
 
 DomainSetup

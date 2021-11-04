@@ -21,14 +21,13 @@ struct Parameters
 
     std::string meshFileName_;
 
-    Parameters(real_t dx, Vector3<real_t> initialVelocity, uint_t timeSteps,
+    Parameters(real_t dx, uint_t timeSteps,
                uint_t vtkWriteFrequency, uint_t stabilityCheckFrequency,
                Vector3<uint_t> cellsPerBlock, double remainingTimeLoggerFrequency,
                std::string const& meshFileName, real_t omega)
     :
         dx_(dx),
         omega_(omega),
-        initialVelocity_(initialVelocity),
         cellsPerBlock_(cellsPerBlock),
         timeSteps_(timeSteps),
         vtkWriteFrequency_(vtkWriteFrequency),

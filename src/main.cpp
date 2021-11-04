@@ -33,17 +33,33 @@
 #include "Parameters.h"
 
 #include <iostream>
+#include <cmath>
 
 using namespace walberla;
+
+class InflowProfile
+{
+    Vector3<real_t> inflowVelocity_;
+    std::shared_ptr<lbm::TimeTracker> timeTracker_;
+
+public:
+    InflowProfile(const Vector3<real_t>& inflowVelocity, std::shared_ptr<lbm::TimeTracker> const& timeTracker) :
+            inflowVelocity_( inflowVelocity ), timeTracker_(timeTracker) {}
+
+    Vector3< real_t > operator()( const Cell& pos, const shared_ptr< StructuredBlockForest >& SbF, IBlock& block ) {
+        WALBERLA_LOG_DEVEL_VAR(static_cast<int>(timeTracker_->getTime()));
+        return static_cast<int>(timeTracker_->getTime()) > 200 ? inflowVelocity_ : 0 * inflowVelocity_;
+    }
+}; // class InflowProfile
 
 FlagUID const FluidFlagUID("Fluid Flag");
 FlagUID const NoSlipFlagUID("NoSlip Flag");
 FlagUID const OutflowUID("Outflow Flag");
 FlagUID const InflowUID("Inflow Flag");
 
-const BoundaryUID NoSlipBoundaryUID("NoSlip Boundary");
-const BoundaryUID OutflowBoundaryUID("Outflow Boundary");
-const BoundaryUID InflowBoundaryUID("Inflow Boundary");
+BoundaryUID const NoSlipBoundaryUID("NoSlip Boundary");
+BoundaryUID const OutflowBoundaryUID("Outflow Boundary");
+BoundaryUID const InflowBoundaryUID("Inflow Boundary");
 
 /*
 // AN181
@@ -90,8 +106,8 @@ void vertexToFaceColor(Mesh& mesh, const Mesh::Color& defaultColor)
         // then we give the face the default color.
         while (vertexIt.is_valid() && useVertexColor)
         {
-        if (vertexColor != mesh.color(*vertexIt)) useVertexColor = false;
-        ++vertexIt;
+            if (vertexColor != mesh.color(*vertexIt)) useVertexColor = false;
+            ++vertexIt;
         }
 
         mesh.set_color(*faceIt, useVertexColor ? vertexColor : defaultColor);
@@ -108,9 +124,6 @@ Parameters constructParameters(std::shared_ptr<Config> config)
     auto parameters = config->getOneBlock("Parameters");
 
     real_t omega = parameters.getParameter< real_t >("omega", real_c(1.8));
-    // TODO perhaps remove initial velocity as it can not be used as desired
-    Vector3< real_t > initialVelocity =
-            parameters.getParameter< Vector3< real_t > >("initialVelocity", Vector3< real_t >());
     uint_t timesteps = parameters.getParameter< uint_t >("timesteps", uint_c(1000));
 
     double remainingTimeLoggerFrequency =
@@ -126,7 +139,7 @@ Parameters constructParameters(std::shared_ptr<Config> config)
 
     auto stabilityCheckerParam = config->getOneBlock("StabilityChecker");
     uint_t stabilityChecker = stabilityCheckerParam.getParameter<uint_t>("StabilityChecker", 1000);
-    return Parameters(dx, initialVelocity, timesteps, VTKwriteFrequency, stabilityChecker, cellsPerBlock,
+    return Parameters(dx, timesteps, VTKwriteFrequency, stabilityChecker, cellsPerBlock,
                       remainingTimeLoggerFrequency, meshFile, omega);
 }
 
@@ -196,9 +209,7 @@ int main(int argc, char* argv[])
     }
 
     // In this LBM simulation, we need three fields, which are very similar to (multi)dimensional arrays
-    // One for the macroscopic velocity values, initialized to 1.0
-    /// REMARK: DO NOT initialize to 1.0! The velocity in LBM units must be less than 0.4 (ideally ~0.1)!
-    /// REMARK: one apparently can not initialize the other velocity directions here
+    // One for the macroscopic velocity values
     BlockDataID velocityFieldId = field::addToStorage< VectorField_T >(blocks, "velocity", real_c(0), field::fzyx);
     // One for the flags which determine if a cell is part of the fluid or boundary
     BlockDataID flagFieldId     = field::addFlagFieldToStorage< FlagField_T >(blocks, "flag field");
@@ -226,11 +237,16 @@ int main(int argc, char* argv[])
         flagField->registerFlag(InflowUID);
     }
 
-    // map boundaryUIDs to colored mesh faces
+    Vector3<real_t> inflowVelocity(real_c(-0.01), real_c(-0.01), real_c(0.01));
+    std::shared_ptr< lbm::TimeTracker > timeTracker = std::make_shared< lbm::TimeTracker >();
+    std::function< Vector3< real_t >(const Cell&, const shared_ptr< StructuredBlockForest >&, IBlock&) >
+        inflowProfile = InflowProfile(inflowVelocity, timeTracker);
     NoSlip_T noSlip(blocks, pdfFieldId);
-    SimpleUBB_T simpleUBB(blocks, pdfFieldId, -0.01, -0.01, 0.01); // WIP: values don't make sense yet
+    //SimpleUBB_T simpleUBB(blocks, pdfFieldId, -0.05, -0.05, 0.05); // WIP: values don't make sense yet
+    DynamicUBB_T dynamicUBB(blocks, pdfFieldId, inflowProfile);
     Outflow_T outflow(blocks, pdfFieldId, real_c(1.0));
 
+    // map boundaryUIDs to colored mesh faces
     mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapper =
             mesh::ColorToBoundaryMapper<mesh::TriangleMesh>(mesh::BoundaryInfo(NoSlipBoundaryUID));
 
@@ -266,7 +282,7 @@ int main(int argc, char* argv[])
                                                mesh::BoundarySetup::OUTSIDE);
 
     noSlip.fillFromFlagField<FlagField_T>(blocks, flagFieldId, NoSlipFlagUID, FluidFlagUID);
-    simpleUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
+    dynamicUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
     outflow.fillFromFlagField<FlagField_T>(blocks, flagFieldId, OutflowUID, FluidFlagUID);
 
     SweepTimeloop timeloop(blocks->getBlockStorage(), parameters.timeSteps_);
@@ -276,13 +292,15 @@ int main(int argc, char* argv[])
 
     /// REMARK: never use write "timeloop.add() << Sweep(A) << Sweep(B);" (see merge request !486)
     timeloop.add() << BeforeFunction(communication, "communication") << Sweep(noSlip);
-    timeloop.add() << Sweep(simpleUBB);
+    //timeloop.add() << Sweep(simpleUBB);
+    timeloop.add() << Sweep(dynamicUBB);
     timeloop.add() << Sweep(outflow);
     timeloop.add() << Sweep(cumulantMRTSweep);
 
     // Time logger
     timeloop.addFuncAfterTimeStep(timing::RemainingTimeLogger(timeloop.getNrOfTimeSteps(), parameters.remainingTimeLoggerFrequency_),
                                  "remaining time logger");
+    timeloop.addFuncAfterTimeStep(makeSharedFunctor(timeTracker), "time tracking");
 
     // set velocity in boundary cells to zero
     auto zeroSetterFunction = [&](IBlock* block) {
@@ -303,7 +321,7 @@ int main(int argc, char* argv[])
 
     if (parameters.vtkWriteFrequency_ > 0)
     {
-        const std::string path = "vtk_out/";
+        std::string const path = "vtk_out/";
         /// REMARK: force_pvtu must be set to true; otherwise the "pvti" format is used and paraview can only display
         /// pvti files if the domain is partitioned in blocks with a block for EVERY part of the domain; this is likely
         /// to be not the case when using smaller dx
@@ -321,7 +339,7 @@ int main(int argc, char* argv[])
     vtkFlagField();
 
     // write domain decomposition
-    vtk::writeDomainDecomposition( blocks );
+    vtk::writeDomainDecomposition(blocks);
 
     timeloop.run();
     std::cout << "Test succesful\n";
