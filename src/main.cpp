@@ -28,29 +28,55 @@
 
 
 #include "InitialPDFsSetter.h"
-//#include "BoundaryHandling.h"
 #include "aliases.h"
 #include "Parameters.h"
+#include "circle.h"
+
+#include "json.hpp"
 
 #include <iostream>
 #include <cmath>
 
 using namespace walberla;
 
+
 class InflowProfile
 {
-    Vector3<real_t> inflowVelocity_;
-    std::shared_ptr<lbm::TimeTracker> timeTracker_;
-
 public:
-    InflowProfile(const Vector3<real_t>& inflowVelocity, std::shared_ptr<lbm::TimeTracker> const& timeTracker) :
-            inflowVelocity_( inflowVelocity ), timeTracker_(timeTracker) {}
+
+    InflowProfile(std::shared_ptr<lbm::TimeTracker> const& timeTracker, NLO::Circle::Coords middle, real_t radius, nlohmann::json const& json) 
+    :
+        timeTracker_(timeTracker),
+        middle_(middle),
+        radius_(radius),
+        json_(json)
+    {
+        auto test = json[0];
+        auto test2 = test["v"];
+        values_ = test2.get<std::vector<real_t>>();
+    }
 
     Vector3< real_t > operator()( const Cell& pos, const shared_ptr< StructuredBlockForest >& SbF, IBlock& block ) {
-        WALBERLA_LOG_DEVEL_VAR(static_cast<int>(timeTracker_->getTime()));
-        return static_cast<int>(timeTracker_->getTime()) > 200 ? inflowVelocity_ : 0 * inflowVelocity_;
+        real_t gamma = 9;
+        Cell copy = pos;
+        SbF->transformBlockLocalToGlobalCell(copy, block);
+        real_t r = std::sqrt(std::pow(copy.x() - std::get<0>(middle_), 2) + 
+                             std::pow(copy.y() - std::get<1>(middle_), 2) + 
+                             std::pow(copy.z() - std::get<2>(middle_), 2));
+        assert(r < radius_);
+        real_t scale_factor = ((gamma + 2) / gamma) * (1 - std::pow(r / radius_, gamma));
+        
+        int time = static_cast<int>(10 * timeTracker_->getTime()) % 10000;
+        return -0.001 * scale_factor * Vector3<real_t>(values_[time], 0, 0);
     }
-}; // class InflowProfile
+
+private:
+    std::shared_ptr<lbm::TimeTracker> timeTracker_;
+    NLO::Circle::Coords middle_;
+    real_t radius_;
+    nlohmann::json json_;
+    std::vector<real_t> values_;
+}; 
 
 FlagUID const FluidFlagUID("Fluid Flag");
 FlagUID const NoSlipFlagUID("NoSlip Flag");
@@ -200,7 +226,7 @@ int main(int argc, char* argv[])
     auto aabb = computeAABB(*mesh);
     aabb.scale(real_c(1.2)); // increase aabb to make sure that boundary conditions are far away from domain boundaries
     auto blocks = createBlockForest(parameters, aabb, distanceOctree);
-    WALBERLA_LOG_DEVEL_VAR(blocks->getNumberOfBlocks());
+    //WALBERLA_LOG_DEVEL_VAR(blocks->getNumberOfBlocks());
 
     // Let the root process write the calculated octree to a file
     WALBERLA_ROOT_SECTION()
@@ -238,13 +264,13 @@ int main(int argc, char* argv[])
     }
 
     Vector3<real_t> inflowVelocity(real_c(-0.01), real_c(-0.01), real_c(0.01));
+    //double ubbX, ubbY, ubbZ;
     std::shared_ptr< lbm::TimeTracker > timeTracker = std::make_shared< lbm::TimeTracker >();
-    std::function< Vector3< real_t >(const Cell&, const shared_ptr< StructuredBlockForest >&, IBlock&) >
-        inflowProfile = InflowProfile(inflowVelocity, timeTracker);
-    NoSlip_T noSlip(blocks, pdfFieldId);
-    //SimpleUBB_T simpleUBB(blocks, pdfFieldId, -0.05, -0.05, 0.05); // WIP: values don't make sense yet
-    DynamicUBB_T dynamicUBB(blocks, pdfFieldId, inflowProfile);
-    Outflow_T outflow(blocks, pdfFieldId, real_c(1.0));
+    //std::function<Vector3<real_t>(const Cell &, const shared_ptr<StructuredBlockForest>&, IBlock&)>
+        //inflowProfile = InflowProfile{timeTracker};
+
+    
+
 
     // map boundaryUIDs to colored mesh faces
     mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapper =
@@ -281,10 +307,78 @@ int main(int argc, char* argv[])
                                                makeBoundaryLocationFunction(distanceOctree, boundaryLocations),
                                                mesh::BoundarySetup::OUTSIDE);
 
+
+
+    std::vector<Block const*> block_vec;
+    int level = 0;
+    blocks->getBlocks(block_vec, level);
+    std::vector<int> inflowX;
+    std::vector<int> inflowY;
+    std::vector<int> inflowZ;
+    for (auto const block: block_vec)
+    {
+        auto* flagField = block->getData<FlagField_T>(flagFieldId);
+        flag_t inflowFlag = flagField->getFlag(InflowUID);
+        
+        for (cell_idx_t x = 0; x < flagField->xSize(); ++x)
+        {
+            for (cell_idx_t y = 0; y < flagField->ySize(); ++y)
+            {
+                for (cell_idx_t z = 0; z < flagField->zSize(); ++z)
+                {
+                    if (flagField->isFlagSet(x, y, z, inflowFlag))
+                    {
+                        Cell cell{x, y, z};
+                        blocks->transformBlockLocalToGlobalCell(cell, *block);
+                        inflowX.push_back(static_cast<int>(cell.x()));
+                        inflowY.push_back(static_cast<int>(cell.y()));
+                        inflowZ.push_back(static_cast<int>(cell.z()));
+                    }
+                }
+            }
+        }
+    }
+
+    std::vector<NLO::Circle::Coords> inflowCells;
+    std::vector<int> inflowX0 = mpi::gatherv(inflowX, 0, MPI_COMM_WORLD);
+    std::vector<int> inflowY0 = mpi::gatherv(inflowY, 0, MPI_COMM_WORLD);
+    std::vector<int> inflowZ0 = mpi::gatherv(inflowZ, 0, MPI_COMM_WORLD);
+    NLO::Circle::Coords middle;
+    real_t radius;
+    if (mpi::MPIManager::instance()->rank() == 0)
+    {
+        for (int idx = 0; idx != inflowX0.size(); ++idx)
+        {
+            inflowCells.push_back({inflowX0[idx], inflowY0[idx], inflowZ0[idx]});
+            //std::cout << inflowX0[idx] << ' ' << inflowY0[idx] << ' ' << inflowZ0[idx] << '\n';
+        }
+        NLO::Circle circle = NLO::Circle(inflowCells);
+        middle = circle.middle();
+        radius = circle.radius();
+        //std::cout << std::get<0>(middle) << ' ' << std::get<1>(middle) << ' ' << std::get<2>(middle) << '\n';
+        
+    }
+    Cell cell{std::get<0>(middle), std::get<1>(middle), std::get<2>(middle)};
+    mpi::broadcastObject(cell);
+    middle = NLO::Circle::Coords{cell.x(), cell.y(), cell.z()};
+    
+    mpi::broadcastObject(radius);
+
+    std::ifstream file_stream("HeartBeatSignal.json");
+    nlohmann::json heartBeatData;
+    file_stream >> heartBeatData;
+
+    std::function< Vector3< real_t >(const Cell&, const shared_ptr< StructuredBlockForest >&, IBlock&) >
+        inflowProfile = InflowProfile(timeTracker, middle, radius, heartBeatData);
+
+    NoSlip_T noSlip(blocks, pdfFieldId);
+    DynamicUBB_T dynamicUBB(blocks, pdfFieldId, inflowProfile);
+    Outflow_T outflow(blocks, pdfFieldId, real_c(1.0));
+
     noSlip.fillFromFlagField<FlagField_T>(blocks, flagFieldId, NoSlipFlagUID, FluidFlagUID);
     dynamicUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
     outflow.fillFromFlagField<FlagField_T>(blocks, flagFieldId, OutflowUID, FluidFlagUID);
-
+    
     SweepTimeloop timeloop(blocks->getBlockStorage(), parameters.timeSteps_);
 
     blockforest::communication::UniformBufferedScheme<Stencil_T> communication(blocks);
@@ -301,6 +395,13 @@ int main(int argc, char* argv[])
     timeloop.addFuncAfterTimeStep(timing::RemainingTimeLogger(timeloop.getNrOfTimeSteps(), parameters.remainingTimeLoggerFrequency_),
                                  "remaining time logger");
     timeloop.addFuncAfterTimeStep(makeSharedFunctor(timeTracker), "time tracking");
+
+    auto updateBdyValues = [&](){
+        dynamicUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
+    };
+
+    timeloop.addFuncAfterTimeStep(updateBdyValues, "update bdy values");
+
 
     // set velocity in boundary cells to zero
     auto zeroSetterFunction = [&](IBlock* block) {
@@ -340,7 +441,6 @@ int main(int argc, char* argv[])
 
     // write domain decomposition
     vtk::writeDomainDecomposition(blocks);
-
     timeloop.run();
-    std::cout << "Test succesful\n";
+    //std::cout << "Test succesful\n";
 }
