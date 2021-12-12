@@ -37,23 +37,58 @@
 #include <iostream>
 #include <cmath>
 
+//#include <Python.h>
+
 using namespace walberla;
+namespace NLO
+{
+struct key_hash : public std::unary_function<NLO::Circle::Coords, std::size_t>
+{
+    std::size_t operator()(const NLO::Circle::Coords& coord) const
+    {
+        // Kindly stolen from waLBerla
+        Cell cell{std::get<0>(coord), std::get<1>(coord), std::get<2>(coord)};
+        std::size_t seed = 0;
+        std::hash<cell_idx_t> hasher;
+
+        seed ^= hasher(cell.x()) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= hasher(cell.y()) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= hasher(cell.z()) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+
+        return seed;
+    }
+};
+}
 
 
 class InflowProfile
 {
 public:
 
-    InflowProfile(std::shared_ptr<lbm::TimeTracker> const& timeTracker, NLO::Circle::Coords middle, real_t radius, nlohmann::json const& json) 
+    InflowProfile(std::shared_ptr<lbm::TimeTracker> const& timeTracker, NLO::Circle::Coords middle, real_t radius, 
+    nlohmann::json const& json, std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> const& noise_map) 
     :
         timeTracker_(timeTracker),
         middle_(middle),
         radius_(radius),
-        json_(json)
+        noise_map_(noise_map)
     {
         auto test = json[0];
         auto test2 = test["v"];
         values_ = test2.get<std::vector<real_t>>();
+        
+        std::string fileName{"noise_data/noise_data_0.json"};
+        std::ifstream file_streamNoise(fileName);
+        nlohmann::json noise_data;
+        file_streamNoise >> noise_data;
+        for (std::size_t idx = 0; idx != noise_data.size(); ++idx)
+        {
+            std::cout << static_cast<int>(noise_data[idx][0]) - 1 << ' ' << static_cast<int>(noise_data[idx][1]) - 1 << ' ' << static_cast<int>(noise_data[idx][2]) - 1 << ": ";
+            std::cout << Vector3<real_t>{noise_data[idx][3], noise_data[idx][4], noise_data[idx][5]} << '\n';
+            noise_map_->insert({{static_cast<int>(noise_data[idx][0]) - 1, static_cast<int>(noise_data[idx][1]) - 1, static_cast<int>(noise_data[idx][2]) - 1}, 
+                                Vector3<real_t>{noise_data[idx][3], noise_data[idx][4], noise_data[idx][5]}});
+        }
+        std::cout << "End of constructor\n\n";
     }
 
     Vector3< real_t > operator()( const Cell& pos, const shared_ptr< StructuredBlockForest >& SbF, IBlock& block ) {
@@ -67,15 +102,17 @@ public:
         real_t scale_factor = ((gamma + 2) / gamma) * (1 - std::pow(r / radius_, gamma));
         
         int time = static_cast<int>(10 * timeTracker_->getTime()) % 10000;
-        return -0.001 * scale_factor * Vector3<real_t>(values_[time], 0, 0);
+        std::cout << copy.x() << ' ' << copy.y() << ' ' << copy.z() << ": ";
+        std::cout << (*noise_map_)[{copy.x(), copy.y(), copy.z()}] << '\n';
+        return -0.001 * scale_factor * Vector3<real_t>(values_[time], 0, 0) + (*noise_map_)[{copy.x(), copy.y(), copy.z()}];
     }
-
 private:
     std::shared_ptr<lbm::TimeTracker> timeTracker_;
     NLO::Circle::Coords middle_;
     real_t radius_;
     nlohmann::json json_;
     std::vector<real_t> values_;
+    std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> noise_map_;
 }; 
 
 FlagUID const FluidFlagUID("Fluid Flag");
@@ -226,7 +263,7 @@ int main(int argc, char* argv[])
     auto aabb = computeAABB(*mesh);
     aabb.scale(real_c(1.2)); // increase aabb to make sure that boundary conditions are far away from domain boundaries
     auto blocks = createBlockForest(parameters, aabb, distanceOctree);
-    //WALBERLA_LOG_DEVEL_VAR(blocks->getNumberOfBlocks());
+    WALBERLA_LOG_DEVEL_VAR(blocks->getNumberOfBlocks());
 
     // Let the root process write the calculated octree to a file
     WALBERLA_ROOT_SECTION()
@@ -262,15 +299,6 @@ int main(int argc, char* argv[])
         flagField->registerFlag(OutflowUID);
         flagField->registerFlag(InflowUID);
     }
-
-    Vector3<real_t> inflowVelocity(real_c(-0.01), real_c(-0.01), real_c(0.01));
-    //double ubbX, ubbY, ubbZ;
-    std::shared_ptr< lbm::TimeTracker > timeTracker = std::make_shared< lbm::TimeTracker >();
-    //std::function<Vector3<real_t>(const Cell &, const shared_ptr<StructuredBlockForest>&, IBlock&)>
-        //inflowProfile = InflowProfile{timeTracker};
-
-    
-
 
     // map boundaryUIDs to colored mesh faces
     mesh::ColorToBoundaryMapper<mesh::TriangleMesh> colorToBoundaryMapper =
@@ -320,11 +348,11 @@ int main(int argc, char* argv[])
         auto* flagField = block->getData<FlagField_T>(flagFieldId);
         flag_t inflowFlag = flagField->getFlag(InflowUID);
         
-        for (cell_idx_t x = 0; x < flagField->xSize(); ++x)
+        for (cell_idx_t x = 0; x < static_cast<int>(flagField->xSize()); ++x)
         {
-            for (cell_idx_t y = 0; y < flagField->ySize(); ++y)
+            for (cell_idx_t y = 0; y < static_cast<int>(flagField->ySize()); ++y)
             {
-                for (cell_idx_t z = 0; z < flagField->zSize(); ++z)
+                for (cell_idx_t z = 0; z < static_cast<int>(flagField->zSize()); ++z)
                 {
                     if (flagField->isFlagSet(x, y, z, inflowFlag))
                     {
@@ -345,19 +373,35 @@ int main(int argc, char* argv[])
     std::vector<int> inflowZ0 = mpi::gatherv(inflowZ, 0, MPI_COMM_WORLD);
     NLO::Circle::Coords middle;
     real_t radius;
+
+    MPI_Barrier(MPI_COMM_WORLD);
     if (mpi::MPIManager::instance()->rank() == 0)
     {
-        for (int idx = 0; idx != inflowX0.size(); ++idx)
+        { // Makes sure file is closed before running python script
+        std::string outputFile{"cellOutput.json"};
+        std::ofstream output_stream{outputFile};
+        nlohmann::json output_json;
+        output_json["timesteps"] = parameters.timeSteps_;
+        for (std::size_t idx = 0; idx != inflowX0.size(); ++idx)
         {
             inflowCells.push_back({inflowX0[idx], inflowY0[idx], inflowZ0[idx]});
-            //std::cout << inflowX0[idx] << ' ' << inflowY0[idx] << ' ' << inflowZ0[idx] << '\n';
+            output_json["cells"][idx] = {inflowX0[idx], inflowY0[idx], inflowZ0[idx]};
         }
+        output_stream << output_json;
         NLO::Circle circle = NLO::Circle(inflowCells);
         middle = circle.middle();
-        radius = circle.radius();
-        //std::cout << std::get<0>(middle) << ' ' << std::get<1>(middle) << ' ' << std::get<2>(middle) << '\n';
-        
+        radius = circle.radius();   
+        }
+        if (system("python3 generate_noise.py") == -1)
+        {
+            WALBERLA_LOG_DEVEL_VAR("Error in Python script, exiting!")
+            MPI_Abort(MPI_COMM_WORLD, -1);
+        }
     }
+
+    // Make sure that we finish the preprocessing before we continue
+    MPI_Barrier(MPI_COMM_WORLD);
+
     Cell cell{std::get<0>(middle), std::get<1>(middle), std::get<2>(middle)};
     mpi::broadcastObject(cell);
     middle = NLO::Circle::Coords{cell.x(), cell.y(), cell.z()};
@@ -368,8 +412,11 @@ int main(int argc, char* argv[])
     nlohmann::json heartBeatData;
     file_stream >> heartBeatData;
 
+    std::shared_ptr< lbm::TimeTracker > timeTracker = std::make_shared< lbm::TimeTracker >();
+    std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> noise 
+        = std::make_shared<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>>();
     std::function< Vector3< real_t >(const Cell&, const shared_ptr< StructuredBlockForest >&, IBlock&) >
-        inflowProfile = InflowProfile(timeTracker, middle, radius, heartBeatData);
+        inflowProfile = InflowProfile(timeTracker, middle, radius, heartBeatData, noise);
 
     NoSlip_T noSlip(blocks, pdfFieldId);
     DynamicUBB_T dynamicUBB(blocks, pdfFieldId, inflowProfile);
@@ -400,8 +447,25 @@ int main(int argc, char* argv[])
         dynamicUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
     };
 
-    timeloop.addFuncAfterTimeStep(updateBdyValues, "update bdy values");
+    auto updateNoiseValues = [&](){
+        noise->clear();
+        std::string fileName = "noise_data/noise_data_" + std::to_string(static_cast<int>(timeTracker->getTime())) + ".json";
+        //std::cout << "[" << mpi::MPIManager::instance()->rank() << "]: ";
+        //std::cout << "fileName= " << fileName << '\n';
+        std::ifstream file_streamNoise(fileName);
+        nlohmann::json noise_data;
+        file_streamNoise >> noise_data;
+        for (std::size_t idx = 0; idx != noise_data.size(); ++idx)
+        {
+            noise->insert({{static_cast<int>(noise_data[idx][0]) - 1, static_cast<int>(noise_data[idx][1]) - 1, static_cast<int>(noise_data[idx][2]) - 1}, 
+                                Vector3<real_t>{noise_data[idx][3], noise_data[idx][4], noise_data[idx][5]}});
+        }
+        //std::cout << "[" << mpi::MPIManager::instance()->rank() << "]: ";
+        //std::cout << "Finished updating noise data after timestep: " << timeTracker->getTime() << '\n';
+    };
 
+    timeloop.addFuncAfterTimeStep(updateNoiseValues, "update noise values");
+    timeloop.addFuncAfterTimeStep(updateBdyValues, "update bdy values");
 
     // set velocity in boundary cells to zero
     auto zeroSetterFunction = [&](IBlock* block) {

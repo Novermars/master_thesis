@@ -1,6 +1,7 @@
 waLBerla_link_files_to_builddir(*.prm)
 waLBerla_link_files_to_builddir(*.obj)
 waLBerla_link_files_to_builddir(*.json)
+waLBerla_link_files_to_builddir(*.py)
 
 
 waLBerla_generate_target_from_python(NAME        generate_cumulant_lbm

@@ -10,12 +10,6 @@ Circle::Circle(std::vector<Coords> const& coordinates)
     middleCell_ = findMiddle();
 }
 
-
-/*std::ostream& operator<< (std::ostream& stream, const Circle& circle)
-{
-    return stream;
-}*/
-
 Circle::Coords Circle::findMiddle()
 {
     int highest_x = 0;
