@@ -40,6 +40,16 @@
 //#include <Python.h>
 
 using namespace walberla;
+
+FlagUID const FluidFlagUID("Fluid Flag");
+FlagUID const NoSlipFlagUID("NoSlip Flag");
+FlagUID const OutflowUID("Outflow Flag");
+FlagUID const InflowUID("Inflow Flag");
+
+BoundaryUID const NoSlipBoundaryUID("NoSlip Boundary");
+BoundaryUID const OutflowBoundaryUID("Outflow Boundary");
+BoundaryUID const InflowBoundaryUID("Inflow Boundary");
+
 namespace NLO
 {
 struct key_hash : public std::unary_function<NLO::Circle::Coords, std::size_t>
@@ -58,17 +68,39 @@ struct key_hash : public std::unary_function<NLO::Circle::Coords, std::size_t>
         return seed;
     }
 };
-}
 
+walberla::Cell getNeighboringInflowCellGlobalCoords(walberla::Cell cell, 
+                                                    const shared_ptr< StructuredBlockForest >& SbF, 
+                                                    IBlock& block, BlockDataID flagFieldId)
+{
+    auto * flagField = block.getData< FlagField_T > ( flagFieldId );
+    flag_t inflowFlag = flagField->getFlag(InflowUID);
+
+    typename FlagField_T::ConstPtr flagFieldIt(*flagField, cell[0], cell[1], cell[2]);
+
+    for (auto dir = stencil::D3Q27::beginNoCenter(); dir != stencil::D3Q27::end(); ++dir)
+    {
+        auto neighborFlags = flagFieldIt.neighbor(*dir, 0);
+        if (isFlagSet(neighborFlags, inflowFlag)) 
+        {
+            SbF->transformBlockLocalToGlobalCell(cell, block);
+            return {cell.x(), cell.y(), cell.z()};
+        }
+    }
+    return {};
+}
+} //end of namespace NLO
 
 class InflowProfile
 {
 public:
 
     InflowProfile(std::shared_ptr<std::unordered_map<NLO::Circle::Coords, 
-                                                     Vector3<real_t>, NLO::key_hash>> const& values_map) 
+                                                     Vector3<real_t>, NLO::key_hash>> const& values_map,
+                  BlockDataID flagFieldId) 
     :
-        values_map_(values_map)
+        values_map_(values_map),
+        flagFieldId_(flagFieldId)
     {        
         std::string fileName{"data/inflow_profile_0.json"};
         std::ifstream file_streamNoise(fileName);
@@ -86,23 +118,14 @@ public:
     }
 
     Vector3< real_t > operator()( const Cell& pos, const shared_ptr< StructuredBlockForest >& SbF, IBlock& block ) {
-        Cell copy = pos;
-        SbF->transformBlockLocalToGlobalCell(copy, block);
-        std::cout << "[" << copy.x() << ", " << copy.y() << ", " << copy.z() << "]\n";
-        return -0.001 * (*values_map_)[{copy.x(), copy.y(), copy.z()}];
+        auto inflowCell = NLO::getNeighboringInflowCellGlobalCoords(pos, SbF, block, flagFieldId_);
+        std::cout << "[" << inflowCell.x() << ", " << inflowCell.y() << ", " << inflowCell.z() << "]\n";
+        return -0.001 * (*values_map_)[NLO::Circle::Coords{inflowCell.x(), inflowCell.y(), inflowCell.z()}];
     }
 private:
     std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> values_map_;
+    BlockDataID flagFieldId_;
 }; 
-
-FlagUID const FluidFlagUID("Fluid Flag");
-FlagUID const NoSlipFlagUID("NoSlip Flag");
-FlagUID const OutflowUID("Outflow Flag");
-FlagUID const InflowUID("Inflow Flag");
-
-BoundaryUID const NoSlipBoundaryUID("NoSlip Boundary");
-BoundaryUID const OutflowBoundaryUID("Outflow Boundary");
-BoundaryUID const InflowBoundaryUID("Inflow Boundary");
 
 /*
 // AN181
@@ -405,7 +428,7 @@ int main(int argc, char* argv[])
     std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> noise 
         = std::make_shared<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>>();
     std::function< Vector3< real_t >(const Cell&, const shared_ptr< StructuredBlockForest >&, IBlock&) >
-        inflowProfile = InflowProfile(noise);
+        inflowProfile = InflowProfile(noise, flagFieldId);
 
     NoSlip_T noSlip(blocks, pdfFieldId);
     DynamicUBB_T dynamicUBB(blocks, pdfFieldId, inflowProfile);
