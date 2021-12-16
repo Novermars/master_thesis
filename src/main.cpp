@@ -88,6 +88,7 @@ public:
     Vector3< real_t > operator()( const Cell& pos, const shared_ptr< StructuredBlockForest >& SbF, IBlock& block ) {
         Cell copy = pos;
         SbF->transformBlockLocalToGlobalCell(copy, block);
+        std::cout << "[" << copy.x() << ", " << copy.y() << ", " << copy.z() << "]\n";
         return -0.001 * (*values_map_)[{copy.x(), copy.y(), copy.z()}];
     }
 private:
@@ -391,6 +392,12 @@ int main(int argc, char* argv[])
         }
     }
 
+    // Debug information for Christoph
+    for (auto const& cells: inflowCells)
+    {
+        std::cout << "[" << std::get<0>(cells) << ", " << std::get<1>(cells) << ", " << std::get<2>(cells) << "]\n";
+    }
+    std::cout << "End of output in main function \n\nBeginning of output in inflowProfile()(...):\n";
     // Make sure that we finish the preprocessing before we continue
     MPI_Barrier(MPI_COMM_WORLD);
 
