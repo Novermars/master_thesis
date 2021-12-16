@@ -83,7 +83,7 @@ def main():
                             # but is probably unphysical... no idea until we get some input from medicine
     scale_profile = np.copy(inflow_profile_data)
     scale_profile[:,:,:,0] = y_z_noise_factor*scale_profile[:,:,:,2]
-    scale_profile[:,:,:,1] = z_z_noise_factor*scale_profile[:,:,:,2]
+    scale_profile[:,:,:,1] = y_z_noise_factor*scale_profile[:,:,:,2]
 
     # Slice the array depending on the number of heart beat cycles and number of timesteps
     ind = slice(0, len(time_signal), int(stride))
