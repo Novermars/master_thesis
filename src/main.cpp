@@ -65,54 +65,33 @@ class InflowProfile
 {
 public:
 
-    InflowProfile(std::shared_ptr<lbm::TimeTracker> const& timeTracker, NLO::Circle::Coords middle, real_t radius, 
-    nlohmann::json const& json, std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> const& noise_map) 
+    InflowProfile(std::shared_ptr<std::unordered_map<NLO::Circle::Coords, 
+                                                     Vector3<real_t>, NLO::key_hash>> const& values_map) 
     :
-        timeTracker_(timeTracker),
-        middle_(middle),
-        radius_(radius),
-        noise_map_(noise_map)
-    {
-        auto test = json[0];
-        auto test2 = test["v"];
-        values_ = test2.get<std::vector<real_t>>();
-        
-        std::string fileName{"noise_data/noise_data_0.json"};
+        values_map_(values_map)
+    {        
+        std::string fileName{"data/inflow_profile_0.json"};
         std::ifstream file_streamNoise(fileName);
-        nlohmann::json noise_data;
-        file_streamNoise >> noise_data;
-        for (std::size_t idx = 0; idx != noise_data.size(); ++idx)
+        nlohmann::json values;
+        file_streamNoise >> values;
+        for (std::size_t idx = 0; idx != values.size(); ++idx)
         {
-            std::cout << static_cast<int>(noise_data[idx][0]) - 1 << ' ' << static_cast<int>(noise_data[idx][1]) - 1 << ' ' << static_cast<int>(noise_data[idx][2]) - 1 << ": ";
-            std::cout << Vector3<real_t>{noise_data[idx][3], noise_data[idx][4], noise_data[idx][5]} << '\n';
-            noise_map_->insert({{static_cast<int>(noise_data[idx][0]) - 1, static_cast<int>(noise_data[idx][1]) - 1, static_cast<int>(noise_data[idx][2]) - 1}, 
-                                Vector3<real_t>{noise_data[idx][3], noise_data[idx][4], noise_data[idx][5]}});
+            values_map_->insert({{static_cast<int>(values[idx][0]) - 1, 
+                                  static_cast<int>(values[idx][1]) - 1, 
+                                  static_cast<int>(values[idx][2]) - 1}, 
+                                  Vector3<real_t>{values[idx][3], 
+                                                  values[idx][4], 
+                                                  values[idx][5]}});
         }
-        std::cout << "End of constructor\n\n";
     }
 
     Vector3< real_t > operator()( const Cell& pos, const shared_ptr< StructuredBlockForest >& SbF, IBlock& block ) {
-        real_t gamma = 9;
         Cell copy = pos;
         SbF->transformBlockLocalToGlobalCell(copy, block);
-        real_t r = std::sqrt(std::pow(copy.x() - std::get<0>(middle_), 2) + 
-                             std::pow(copy.y() - std::get<1>(middle_), 2) + 
-                             std::pow(copy.z() - std::get<2>(middle_), 2));
-        assert(r < radius_);
-        real_t scale_factor = ((gamma + 2) / gamma) * (1 - std::pow(r / radius_, gamma));
-        
-        int time = static_cast<int>(10 * timeTracker_->getTime()) % 10000;
-        std::cout << copy.x() << ' ' << copy.y() << ' ' << copy.z() << ": ";
-        std::cout << (*noise_map_)[{copy.x(), copy.y(), copy.z()}] << '\n';
-        return -0.001 * scale_factor * Vector3<real_t>(values_[time], 0, 0) + (*noise_map_)[{copy.x(), copy.y(), copy.z()}];
+        return -0.001 * (*values_map_)[{copy.x(), copy.y(), copy.z()}];
     }
 private:
-    std::shared_ptr<lbm::TimeTracker> timeTracker_;
-    NLO::Circle::Coords middle_;
-    real_t radius_;
-    nlohmann::json json_;
-    std::vector<real_t> values_;
-    std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> noise_map_;
+    std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> values_map_;
 }; 
 
 FlagUID const FluidFlagUID("Fluid Flag");
@@ -192,6 +171,7 @@ Parameters constructParameters(std::shared_ptr<Config> config)
     double remainingTimeLoggerFrequency =
         parameters.getParameter< double >("remainingTimeLoggerFrequency", 3.0); // in seconds
     const uint_t VTKwriteFrequency = parameters.getParameter< uint_t >("VTKwriteFrequency", 10);
+    real_t numHeartBeats = parameters.getParameter<real_t>("numHeartBeatCycles", 1);
 
     // read domain parameters
     auto domainParameters = config->getOneBlock("DomainSetup");
@@ -203,7 +183,7 @@ Parameters constructParameters(std::shared_ptr<Config> config)
     auto stabilityCheckerParam = config->getOneBlock("StabilityChecker");
     uint_t stabilityChecker = stabilityCheckerParam.getParameter<uint_t>("StabilityChecker", 1000);
     return Parameters(dx, timesteps, VTKwriteFrequency, stabilityChecker, cellsPerBlock,
-                      remainingTimeLoggerFrequency, meshFile, omega);
+                      remainingTimeLoggerFrequency, numHeartBeats, meshFile, omega);
 }
 
 /* Loads the mesh from the file including the nonstandard vertex colors
@@ -336,7 +316,10 @@ int main(int argc, char* argv[])
                                                mesh::BoundarySetup::OUTSIDE);
 
 
-
+    // We want to calculate the radius and the middle point of the circle that describes the inflow
+    // For that we loop over all blocks in the SbF on the rank, and then in every block we loop over 
+    // all the cells without the ghost nodes and check if the cell is part of the inflow boundary
+    // If that's the case, we save its global coordinates 
     std::vector<Block const*> block_vec;
     int level = 0;
     blocks->getBlocks(block_vec, level);
@@ -366,15 +349,17 @@ int main(int argc, char* argv[])
             }
         }
     }
-
-    std::vector<NLO::Circle::Coords> inflowCells;
+    // We then send the global coordinates of the cells belonging to the inflow boundary
+    // to rank zero
     std::vector<int> inflowX0 = mpi::gatherv(inflowX, 0, MPI_COMM_WORLD);
     std::vector<int> inflowY0 = mpi::gatherv(inflowY, 0, MPI_COMM_WORLD);
     std::vector<int> inflowZ0 = mpi::gatherv(inflowZ, 0, MPI_COMM_WORLD);
+
+    std::vector<NLO::Circle::Coords> inflowCells;
     NLO::Circle::Coords middle;
     real_t radius;
 
-    MPI_Barrier(MPI_COMM_WORLD);
+    MPI_Barrier(MPI_COMM_WORLD); // make sure that all the ranks are synchronised here
     if (mpi::MPIManager::instance()->rank() == 0)
     {
         { // Makes sure file is closed before running python script
@@ -382,17 +367,24 @@ int main(int argc, char* argv[])
         std::ofstream output_stream{outputFile};
         nlohmann::json output_json;
         output_json["timesteps"] = parameters.timeSteps_;
+        output_json["numHeartBeats"] = parameters.numHeartBeats_;
         for (std::size_t idx = 0; idx != inflowX0.size(); ++idx)
         {
             inflowCells.push_back({inflowX0[idx], inflowY0[idx], inflowZ0[idx]});
+            // Put the cell's coordinates in the json file for the python program to read it
             output_json["cells"][idx] = {inflowX0[idx], inflowY0[idx], inflowZ0[idx]};
         }
-        output_stream << output_json;
+
         NLO::Circle circle = NLO::Circle(inflowCells);
         middle = circle.middle();
         radius = circle.radius();   
+        output_json["diameter"] = 2 * radius;
+        output_json["middle"] = {std::get<0>(middle), std::get<1>(middle), std::get<2>(middle)};
+        output_stream << output_json;
         }
-        if (system("python3 generate_noise.py") == -1)
+
+        // Now call the Python program which generates the inflow profile including the noise
+        if (std::system("python3 generate_noise.py") == -1)
         {
             WALBERLA_LOG_DEVEL_VAR("Error in Python script, exiting!")
             MPI_Abort(MPI_COMM_WORLD, -1);
@@ -402,21 +394,11 @@ int main(int argc, char* argv[])
     // Make sure that we finish the preprocessing before we continue
     MPI_Barrier(MPI_COMM_WORLD);
 
-    Cell cell{std::get<0>(middle), std::get<1>(middle), std::get<2>(middle)};
-    mpi::broadcastObject(cell);
-    middle = NLO::Circle::Coords{cell.x(), cell.y(), cell.z()};
-    
-    mpi::broadcastObject(radius);
-
-    std::ifstream file_stream("HeartBeatSignal.json");
-    nlohmann::json heartBeatData;
-    file_stream >> heartBeatData;
-
     std::shared_ptr< lbm::TimeTracker > timeTracker = std::make_shared< lbm::TimeTracker >();
     std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> noise 
         = std::make_shared<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>>();
     std::function< Vector3< real_t >(const Cell&, const shared_ptr< StructuredBlockForest >&, IBlock&) >
-        inflowProfile = InflowProfile(timeTracker, middle, radius, heartBeatData, noise);
+        inflowProfile = InflowProfile(noise);
 
     NoSlip_T noSlip(blocks, pdfFieldId);
     DynamicUBB_T dynamicUBB(blocks, pdfFieldId, inflowProfile);
@@ -443,13 +425,14 @@ int main(int argc, char* argv[])
                                  "remaining time logger");
     timeloop.addFuncAfterTimeStep(makeSharedFunctor(timeTracker), "time tracking");
 
+    // 
     auto updateBdyValues = [&](){
         dynamicUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
     };
 
     auto updateNoiseValues = [&](){
         noise->clear();
-        std::string fileName = "noise_data/noise_data_" + std::to_string(static_cast<int>(timeTracker->getTime())) + ".json";
+        std::string fileName = "data/inflow_profile_" + std::to_string(static_cast<int>(timeTracker->getTime())) + ".json";
         //std::cout << "[" << mpi::MPIManager::instance()->rank() << "]: ";
         //std::cout << "fileName= " << fileName << '\n';
         std::ifstream file_streamNoise(fileName);

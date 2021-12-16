@@ -54,7 +54,7 @@ Circle::Coords Circle::findMiddle()
 
     std::cout << middle_x << ' ' << middle_y << ' ' << middle_z << '\n';
     // Assumes that the x coordinates are constant!!
-    radius_ = std::min(middle_y, middle_z);
+    radius_ = std::max(middle_y, middle_z);
     std::cout << "Radius inside circle: " << radius_ << '\n';
     return {middle_x + lowest_x, middle_y + lowest_y, middle_z + lowest_z};
 }

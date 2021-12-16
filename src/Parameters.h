@@ -19,12 +19,14 @@ struct Parameters
     uint_t stabilityCheckFrequency_;
     double remainingTimeLoggerFrequency_;
 
+    real_t numHeartBeats_;
+
     std::string meshFileName_;
 
     Parameters(real_t dx, uint_t timeSteps,
                uint_t vtkWriteFrequency, uint_t stabilityCheckFrequency,
                Vector3<uint_t> cellsPerBlock, double remainingTimeLoggerFrequency,
-               std::string const& meshFileName, real_t omega)
+               real_t numHeartBeats, std::string const& meshFileName, real_t omega)
     :
         dx_(dx),
         omega_(omega),
@@ -33,6 +35,7 @@ struct Parameters
         vtkWriteFrequency_(vtkWriteFrequency),
         stabilityCheckFrequency_(stabilityCheckFrequency),
         remainingTimeLoggerFrequency_(remainingTimeLoggerFrequency),
+        numHeartBeats_(numHeartBeats),
         meshFileName_(meshFileName)
     {}
 };

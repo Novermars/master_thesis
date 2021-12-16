@@ -1,15 +1,16 @@
 Parameters 
 {
 	omega           1.8;
-	timesteps       1;
+	timesteps       500;
 	remainingTimeLoggerFrequency 3.0; // in seconds
-    VTKwriteFrequency 20;
+    numHeartBeatCyles 0.5;
+    VTKwriteFrequency 10;
 }
 
 DomainSetup
 {
-   meshFile         AN171_colored_aligned.obj;
-   dx               0.05;
+   meshFile         cylinder.obj;
+   dx               0.025;
    cellsPerBlock    < 16, 16, 16 >;
 }
 
