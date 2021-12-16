@@ -29,9 +29,9 @@ def write_json(cells_original, t_idx, turbulent_vel, indices_y, indices_z):
         tmp = [coords[0], 
                coords[1], 
                coords[2],
-               turbulent_vel[y,z,0,2],
-               turbulent_vel[y,z,0,0],
-               turbulent_vel[y,z,0,1]]
+               turbulent_vel[y,z,0,2], # Inflow velocity in the -x direction
+               turbulent_vel[y,z,0,0], # Inflow velocity in the -y direction
+               turbulent_vel[y,z,0,1]] # Inflow velocity in the -z direction
         data.append(tmp)
 
     with open(filename, "w") as json_file:
