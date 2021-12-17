@@ -68,27 +68,6 @@ struct key_hash : public std::unary_function<NLO::Circle::Coords, std::size_t>
         return seed;
     }
 };
-
-walberla::Cell getNeighboringInflowCellGlobalCoords(walberla::Cell cell, 
-                                                    const shared_ptr< StructuredBlockForest >& SbF, 
-                                                    IBlock& block, BlockDataID flagFieldId)
-{
-    auto * flagField = block.getData< FlagField_T > ( flagFieldId );
-    flag_t inflowFlag = flagField->getFlag(InflowUID);
-
-    typename FlagField_T::ConstPtr flagFieldIt(*flagField, cell[0], cell[1], cell[2]);
-
-    for (auto dir = stencil::D3Q27::beginNoCenter(); dir != stencil::D3Q27::end(); ++dir)
-    {
-        auto neighborFlags = flagFieldIt.neighbor(*dir, 0);
-        if (isFlagSet(neighborFlags, inflowFlag)) 
-        {
-            SbF->transformBlockLocalToGlobalCell(cell, block);
-            return {cell.x(), cell.y(), cell.z()};
-        }
-    }
-    return {};
-}
 } //end of namespace NLO
 
 class InflowProfile
@@ -108,9 +87,9 @@ public:
         file_streamNoise >> values;
         for (std::size_t idx = 0; idx != values.size(); ++idx)
         {
-            values_map_->insert({{static_cast<int>(values[idx][0]) - 1, 
-                                  static_cast<int>(values[idx][1]) - 1, 
-                                  static_cast<int>(values[idx][2]) - 1}, 
+            values_map_->insert({{static_cast<int>(values[idx][0]), 
+                                  static_cast<int>(values[idx][1]), 
+                                  static_cast<int>(values[idx][2])}, 
                                   Vector3<real_t>{values[idx][3], 
                                                   values[idx][4], 
                                                   values[idx][5]}});
@@ -118,8 +97,8 @@ public:
     }
 
     Vector3< real_t > operator()( const Cell& pos, const shared_ptr< StructuredBlockForest >& SbF, IBlock& block ) {
-        auto inflowCell = NLO::getNeighboringInflowCellGlobalCoords(pos, SbF, block, flagFieldId_);
-        std::cout << "[" << inflowCell.x() << ", " << inflowCell.y() << ", " << inflowCell.z() << "]\n";
+        auto inflowCell = pos;
+        SbF->transformBlockLocalToGlobalCell(inflowCell, block);
         return -0.001 * (*values_map_)[NLO::Circle::Coords{inflowCell.x(), inflowCell.y(), inflowCell.z()}];
     }
 private:
@@ -414,13 +393,7 @@ int main(int argc, char* argv[])
             MPI_Abort(MPI_COMM_WORLD, -1);
         }
     }
-
-    // Debug information for Christoph
-    for (auto const& cells: inflowCells)
-    {
-        std::cout << "[" << std::get<0>(cells) << ", " << std::get<1>(cells) << ", " << std::get<2>(cells) << "]\n";
-    }
-    std::cout << "End of output in main function \n\nBeginning of output in inflowProfile()(...):\n";
+    
     // Make sure that we finish the preprocessing before we continue
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -463,18 +436,18 @@ int main(int argc, char* argv[])
     auto updateNoiseValues = [&](){
         noise->clear();
         std::string fileName = "data/inflow_profile_" + std::to_string(static_cast<int>(timeTracker->getTime())) + ".json";
-        //std::cout << "[" << mpi::MPIManager::instance()->rank() << "]: ";
-        //std::cout << "fileName= " << fileName << '\n';
         std::ifstream file_streamNoise(fileName);
-        nlohmann::json noise_data;
-        file_streamNoise >> noise_data;
-        for (std::size_t idx = 0; idx != noise_data.size(); ++idx)
+        nlohmann::json inflow_profile;
+        file_streamNoise >> inflow_profile;
+        for (std::size_t idx = 0; idx != inflow_profile.size(); ++idx)
         {
-            noise->insert({{static_cast<int>(noise_data[idx][0]) - 1, static_cast<int>(noise_data[idx][1]) - 1, static_cast<int>(noise_data[idx][2]) - 1}, 
-                                Vector3<real_t>{noise_data[idx][3], noise_data[idx][4], noise_data[idx][5]}});
+            noise->insert({{static_cast<int>(inflow_profile[idx][0]),
+                            static_cast<int>(inflow_profile[idx][1]),
+                            static_cast<int>(inflow_profile[idx][2])}, 
+                            Vector3<real_t>{inflow_profile[idx][3], 
+                                            inflow_profile[idx][4], 
+                                            inflow_profile[idx][5]}});
         }
-        //std::cout << "[" << mpi::MPIManager::instance()->rank() << "]: ";
-        //std::cout << "Finished updating noise data after timestep: " << timeTracker->getTime() << '\n';
     };
 
     timeloop.addFuncAfterTimeStep(updateNoiseValues, "update noise values");

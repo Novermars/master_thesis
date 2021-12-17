@@ -79,7 +79,7 @@ def main():
 
     # In order to incorporate x and y direction noise, copy the parabolic array also to x and y
     # components + scale them if desired
-    y_z_noise_factor = 10   # A value of 1 is what Ustim originally did. A value of ~10 looks really nice
+    y_z_noise_factor = 1   # A value of 1 is what Ustim originally did. A value of ~10 looks really nice
                             # but is probably unphysical... no idea until we get some input from medicine
     scale_profile = np.copy(inflow_profile_data)
     scale_profile[:,:,:,0] = y_z_noise_factor*scale_profile[:,:,:,2]
@@ -90,7 +90,7 @@ def main():
     ts_samples = time_signal[ind]
 
     # For every timestep calculate the inflow profile and write it to a json file
-    for t_idx in range(len(ts_samples)):
+    for t_idx in range(len(ts_samples) - 1):
         inflow_vel = ts_samples[t_idx] * inflow_profile_data
         cut = np.copy(noise_field[:,:,[t_idx,t_idx],:])
         cut = np.ascontiguousarray(cut)
