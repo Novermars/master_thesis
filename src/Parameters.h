@@ -17,16 +17,20 @@ struct Parameters
     uint_t timeSteps_;
     uint_t vtkWriteFrequency_;
     uint_t stabilityCheckFrequency_;
+    uint_t numConstNoises_;
     double remainingTimeLoggerFrequency_;
 
     real_t numHeartBeats_;
 
     std::string meshFileName_;
+    bool generateInflowProfile_;
 
     Parameters(real_t dx, uint_t timeSteps,
                uint_t vtkWriteFrequency, uint_t stabilityCheckFrequency,
+               uint_t numConstNoises,
                Vector3<uint_t> cellsPerBlock, double remainingTimeLoggerFrequency,
-               real_t numHeartBeats, std::string const& meshFileName, real_t omega)
+               real_t numHeartBeats, std::string const& meshFileName, real_t omega,
+               bool generateInflowProfile)
     :
         dx_(dx),
         omega_(omega),
@@ -34,9 +38,11 @@ struct Parameters
         timeSteps_(timeSteps),
         vtkWriteFrequency_(vtkWriteFrequency),
         stabilityCheckFrequency_(stabilityCheckFrequency),
+        numConstNoises_(numConstNoises),
         remainingTimeLoggerFrequency_(remainingTimeLoggerFrequency),
         numHeartBeats_(numHeartBeats),
-        meshFileName_(meshFileName)
+        meshFileName_(meshFileName),
+        generateInflowProfile_(generateInflowProfile)
     {}
 };
 

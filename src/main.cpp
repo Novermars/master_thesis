@@ -75,11 +75,9 @@ class InflowProfile
 public:
 
     InflowProfile(std::shared_ptr<std::unordered_map<NLO::Circle::Coords, 
-                                                     Vector3<real_t>, NLO::key_hash>> const& values_map,
-                  BlockDataID flagFieldId) 
+                                                     Vector3<real_t>, NLO::key_hash>> const& values_map) 
     :
-        values_map_(values_map),
-        flagFieldId_(flagFieldId)
+        values_map_(values_map)
     {        
         std::string fileName{"data/inflow_profile_0.json"};
         std::ifstream file_streamNoise(fileName);
@@ -99,11 +97,10 @@ public:
     Vector3< real_t > operator()( const Cell& pos, const shared_ptr< StructuredBlockForest >& SbF, IBlock& block ) {
         auto inflowCell = pos;
         SbF->transformBlockLocalToGlobalCell(inflowCell, block);
-        return -0.001 * (*values_map_)[NLO::Circle::Coords{inflowCell.x(), inflowCell.y(), inflowCell.z()}];
+        return (*values_map_)[NLO::Circle::Coords{inflowCell.x(), inflowCell.y(), inflowCell.z()}];
     }
 private:
     std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> values_map_;
-    BlockDataID flagFieldId_;
 }; 
 
 /*
@@ -175,6 +172,8 @@ Parameters constructParameters(std::shared_ptr<Config> config)
         parameters.getParameter< double >("remainingTimeLoggerFrequency", 3.0); // in seconds
     const uint_t VTKwriteFrequency = parameters.getParameter< uint_t >("VTKwriteFrequency", 10);
     real_t numHeartBeats = parameters.getParameter<real_t>("numHeartBeatCycles", 1);
+    uint_t numConstNoises = parameters.getParameter<uint_t>("numConstNoises", 100);
+    bool generateInflowProfile = parameters.getParameter<uint_t>("generateInflowProfile", 0) == 0;
 
     // read domain parameters
     auto domainParameters = config->getOneBlock("DomainSetup");
@@ -185,8 +184,8 @@ Parameters constructParameters(std::shared_ptr<Config> config)
 
     auto stabilityCheckerParam = config->getOneBlock("StabilityChecker");
     uint_t stabilityChecker = stabilityCheckerParam.getParameter<uint_t>("StabilityChecker", 1000);
-    return Parameters(dx, timesteps, VTKwriteFrequency, stabilityChecker, cellsPerBlock,
-                      remainingTimeLoggerFrequency, numHeartBeats, meshFile, omega);
+    return Parameters(dx, timesteps, VTKwriteFrequency, stabilityChecker, numConstNoises, cellsPerBlock,
+                      remainingTimeLoggerFrequency, numHeartBeats, meshFile, omega, generateInflowProfile);
 }
 
 /* Loads the mesh from the file including the nonstandard vertex colors
@@ -318,82 +317,93 @@ int main(int argc, char* argv[])
                                                makeBoundaryLocationFunction(distanceOctree, boundaryLocations),
                                                mesh::BoundarySetup::OUTSIDE);
 
-
-    // We want to calculate the radius and the middle point of the circle that describes the inflow
-    // For that we loop over all blocks in the SbF on the rank, and then in every block we loop over 
-    // all the cells without the ghost nodes and check if the cell is part of the inflow boundary
-    // If that's the case, we save its global coordinates 
-    std::vector<Block const*> block_vec;
-    int level = 0;
-    blocks->getBlocks(block_vec, level);
-    std::vector<int> inflowX;
-    std::vector<int> inflowY;
-    std::vector<int> inflowZ;
-    for (auto const block: block_vec)
+    // Only generate new inflow profile if specified
+    // Warning: Must have proper amount of files and the dx and mesh should be the same!
+    // Only useful for debugging
+    if (parameters.generateInflowProfile_)
     {
-        auto* flagField = block->getData<FlagField_T>(flagFieldId);
-        flag_t inflowFlag = flagField->getFlag(InflowUID);
-        
-        for (cell_idx_t x = 0; x < static_cast<int>(flagField->xSize()); ++x)
+        WALBERLA_ROOT_SECTION()
         {
-            for (cell_idx_t y = 0; y < static_cast<int>(flagField->ySize()); ++y)
+            WALBERLA_LOG_DEVEL("Generating new inflow profile!");
+        }
+        // We want to calculate the radius and the middle point of the circle that describes the inflow
+        // For that we loop over all blocks in the SbF on the rank, and then in every block we loop over 
+        // all the cells without the ghost nodes and check if the cell is part of the inflow boundary
+        // If that's the case, we save its global coordinates 
+        std::vector<Block const*> block_vec;
+        int level = 0;
+        blocks->getBlocks(block_vec, level);
+        std::vector<int> inflowX;
+        std::vector<int> inflowY;
+        std::vector<int> inflowZ;
+        for (auto const block: block_vec)
+        {
+            auto* flagField = block->getData<FlagField_T>(flagFieldId);
+            flag_t inflowFlag = flagField->getFlag(InflowUID);
+            
+            for (cell_idx_t x = 0; x < static_cast<int>(flagField->xSize()); ++x)
             {
-                for (cell_idx_t z = 0; z < static_cast<int>(flagField->zSize()); ++z)
+                for (cell_idx_t y = 0; y < static_cast<int>(flagField->ySize()); ++y)
                 {
-                    if (flagField->isFlagSet(x, y, z, inflowFlag))
+                    for (cell_idx_t z = 0; z < static_cast<int>(flagField->zSize()); ++z)
                     {
-                        Cell cell{x, y, z};
-                        blocks->transformBlockLocalToGlobalCell(cell, *block);
-                        inflowX.push_back(static_cast<int>(cell.x()));
-                        inflowY.push_back(static_cast<int>(cell.y()));
-                        inflowZ.push_back(static_cast<int>(cell.z()));
+                        if (flagField->isFlagSet(x, y, z, inflowFlag))
+                        {
+                            Cell cell{x, y, z};
+                            blocks->transformBlockLocalToGlobalCell(cell, *block);
+                            inflowX.push_back(static_cast<int>(cell.x()));
+                            inflowY.push_back(static_cast<int>(cell.y()));
+                            inflowZ.push_back(static_cast<int>(cell.z()));
+                        }
                     }
                 }
             }
         }
-    }
-    // We then send the global coordinates of the cells belonging to the inflow boundary
-    // to rank zero
-    std::vector<int> inflowX0 = mpi::gatherv(inflowX, 0, MPI_COMM_WORLD);
-    std::vector<int> inflowY0 = mpi::gatherv(inflowY, 0, MPI_COMM_WORLD);
-    std::vector<int> inflowZ0 = mpi::gatherv(inflowZ, 0, MPI_COMM_WORLD);
+        // We then send the global coordinates of the cells belonging to the inflow boundary
+        // to rank zero
+        std::vector<int> inflowX0 = mpi::gatherv(inflowX, 0, MPI_COMM_WORLD);
+        std::vector<int> inflowY0 = mpi::gatherv(inflowY, 0, MPI_COMM_WORLD);
+        std::vector<int> inflowZ0 = mpi::gatherv(inflowZ, 0, MPI_COMM_WORLD);
 
-    std::vector<NLO::Circle::Coords> inflowCells;
-    NLO::Circle::Coords middle;
-    real_t radius;
+        std::vector<NLO::Circle::Coords> inflowCells;
+        NLO::Circle::Coords middle;
+        real_t radius;
 
-    MPI_Barrier(MPI_COMM_WORLD); // make sure that all the ranks are synchronised here
-    if (mpi::MPIManager::instance()->rank() == 0)
-    {
-        { // Makes sure file is closed before running python script
-        std::string outputFile{"cellOutput.json"};
-        std::ofstream output_stream{outputFile};
-        nlohmann::json output_json;
-        output_json["timesteps"] = parameters.timeSteps_;
-        output_json["numHeartBeats"] = parameters.numHeartBeats_;
-        for (std::size_t idx = 0; idx != inflowX0.size(); ++idx)
+        MPI_Barrier(MPI_COMM_WORLD); // make sure that all the ranks are synchronised here
+        if (mpi::MPIManager::instance()->rank() == 0)
         {
-            inflowCells.push_back({inflowX0[idx], inflowY0[idx], inflowZ0[idx]});
-            // Put the cell's coordinates in the json file for the python program to read it
-            output_json["cells"][idx] = {inflowX0[idx], inflowY0[idx], inflowZ0[idx]};
-        }
+            { // Makes sure file is closed before running python script
+            std::string outputFile{"cellOutput.json"};
+            std::ofstream output_stream{outputFile};
+            nlohmann::json output_json;
+            output_json["timesteps"] = parameters.timeSteps_;
+            output_json["numHeartBeats"] = parameters.numHeartBeats_;
+            output_json["dx"] = parameters.dx_;
+            output_json["omega"] = parameters.omega_;
+            output_json["numConstNoises"] = parameters.numConstNoises_;
+            for (std::size_t idx = 0; idx != inflowX0.size(); ++idx)
+            {
+                inflowCells.push_back({inflowX0[idx], inflowY0[idx], inflowZ0[idx]});
+                // Put the cell's coordinates in the json file for the python program to read it
+                output_json["cells"][idx] = {inflowX0[idx], inflowY0[idx], inflowZ0[idx]};
+            }
 
-        NLO::Circle circle = NLO::Circle(inflowCells);
-        middle = circle.middle();
-        radius = circle.radius();   
-        output_json["diameter"] = 2 * radius;
-        output_json["middle"] = {std::get<0>(middle), std::get<1>(middle), std::get<2>(middle)};
-        output_stream << output_json;
-        }
+            NLO::Circle circle = NLO::Circle(inflowCells);
+            middle = circle.middle();
+            radius = circle.radius();   
+            output_json["diameter"] = 2 * radius;
+            output_json["middle"] = {std::get<0>(middle), std::get<1>(middle), std::get<2>(middle)};
+            output_stream << output_json;
+            }
 
-        // Now call the Python program which generates the inflow profile including the noise
-        if (std::system("python3 generate_noise.py") == -1)
-        {
-            WALBERLA_LOG_DEVEL_VAR("Error in Python script, exiting!")
-            MPI_Abort(MPI_COMM_WORLD, -1);
+            // Now call the Python program which generates the inflow profile including the noise
+            if (std::system("python3 generate_noise.py") == -1)
+            {
+                WALBERLA_LOG_DEVEL_VAR("Error in Python script, exiting!")
+                MPI_Abort(MPI_COMM_WORLD, -1);
+            }
         }
-    }
-    
+    }    
     // Make sure that we finish the preprocessing before we continue
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -401,7 +411,7 @@ int main(int argc, char* argv[])
     std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> noise 
         = std::make_shared<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>>();
     std::function< Vector3< real_t >(const Cell&, const shared_ptr< StructuredBlockForest >&, IBlock&) >
-        inflowProfile = InflowProfile(noise, flagFieldId);
+        inflowProfile = InflowProfile(noise);
 
     NoSlip_T noSlip(blocks, pdfFieldId);
     DynamicUBB_T dynamicUBB(blocks, pdfFieldId, inflowProfile);
@@ -410,8 +420,18 @@ int main(int argc, char* argv[])
     noSlip.fillFromFlagField<FlagField_T>(blocks, flagFieldId, NoSlipFlagUID, FluidFlagUID);
     dynamicUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
     outflow.fillFromFlagField<FlagField_T>(blocks, flagFieldId, OutflowUID, FluidFlagUID);
+
+    nlohmann::json metaData_json;
+    std::ifstream metaDataFile{"metaData.json"};
+    metaDataFile >> metaData_json;
+    auto timeSteps = metaData_json["timesteps"];
+
+    WALBERLA_ROOT_SECTION()
+    {
+        WALBERLA_LOG_DEVEL_VAR(timeSteps);
+    }
     
-    SweepTimeloop timeloop(blocks->getBlockStorage(), parameters.timeSteps_);
+    SweepTimeloop timeloop(blocks->getBlockStorage(), timeSteps);
 
     blockforest::communication::UniformBufferedScheme<Stencil_T> communication(blocks);
     communication.addPackInfo(make_shared< PackInfo_T >(pdfFieldId));

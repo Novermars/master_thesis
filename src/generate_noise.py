@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 from script.main_NoiseGenerator import generateNoise
+from scipy.interpolate import CubicSpline
 import os 
 
 def inflow_profile(points_y, points_z, points_t, pipe_rad=1, pipe_cs_cent=[0,0,0], gamma=9):
@@ -29,9 +30,9 @@ def write_json(cells_original, t_idx, turbulent_vel, indices_y, indices_z):
         tmp = [coords[0], 
                coords[1], 
                coords[2],
-               turbulent_vel[y,z,0,2], # Inflow velocity in the -x direction
-               turbulent_vel[y,z,0,0], # Inflow velocity in the -y direction
-               turbulent_vel[y,z,0,1]] # Inflow velocity in the -z direction
+               -turbulent_vel[y,z,0,2], # Inflow velocity in the +x direction
+                turbulent_vel[y,z,0,0], # Inflow velocity in the +y direction
+                turbulent_vel[y,z,0,1]] # Inflow velocity in the +z direction
         data.append(tmp)
 
     with open(filename, "w") as json_file:
@@ -42,22 +43,67 @@ def main():
     # read data
     with open('cellOutput.json') as data_file:
         cell_data = json.loads(data_file.read())
-        timesteps = cell_data["timesteps"]
+        #timesteps = cell_data["timesteps"]
         diameter = cell_data["diameter"]
+        omega = cell_data["omega"]
         radius = diameter / 2
         middle = cell_data["middle"]
-        numHeartBeats = cell_data["numHeartBeats"]    
+        numHeartBeats = cell_data["numHeartBeats"]  
+        num_const_noises = cell_data["numConstNoises"]  
         cells_original = cell_data["cells"].copy()
 
     with open('HeartBeatSignal.json') as hbs_file:
         hbs_data = json.loads(hbs_file.read())
         hbs_data = hbs_data[0]
-        time_signal = hbs_data['v']
+        velocity_values = hbs_data['v']
+        area = hbs_data['a'][0]
+        t_vals = hbs_data['t']
 
-    # Amount we have to skip in the time signal
-    stride = len(time_signal) / (timesteps * numHeartBeats)
+    print(numHeartBeats)
+    # Convert to lattice units
+    # Kinematic viscosity
+    nu = 3.3 * 10 ** -6 # m^2/s
+    print(f"area={area}")
+    # Physical dx
+    dx = 2 * np.sqrt(area / np.pi) / diameter #cm
+    dx = dx / 100 #m
+    # Physical dt
+    dt = 1 / 3 * (1 / omega - 0.5) * (dx ** 2) / nu # s
+    timesteps = int(numHeartBeats / dt)
+    print(f"numHeartBeats={numHeartBeats}")
+    print(f"dx = {dx}m")
+    print(f"dt = {dt}s")
+    print(timesteps)
 
-    noise_field = generateNoise(int(diameter) + 1, int(diameter) + 1, int(timesteps) + 1)
+    # Map the time values from [19.0001, 20] to [0, 1]
+    # For this we have to add the value [19]
+    t_vals = [19.0] + t_vals
+    t_vals = [t - 19 for t in t_vals]
+
+    # Delete duplicate values
+    t_vals = np.asarray(t_vals)
+    _, unique_indices = np.unique(t_vals, return_index=True) 
+    t_vals = t_vals[unique_indices]
+    print(len(t_vals))
+
+    # Similarly, we have to add the value also to the velocity values
+    # As the profile should be periodic, we simply set this value equal to the last one
+    # and also delete the duplicates
+    velocity_values = [velocity_values[-1]] + velocity_values
+    velocity_values = np.asarray(velocity_values)
+    velocity_values = velocity_values[unique_indices]
+
+    #convert from cm/s to m/s
+    velocity_values = velocity_values / 100
+    print(len(velocity_values))
+
+    # Interpolate the velocity values
+    interpolated_v_values = CubicSpline(t_vals, velocity_values, bc_type='periodic')
+    x_vals = np.linspace(0, 1, 1000)
+    num_noises = int((timesteps + 1) / num_const_noises) + 2
+    print(f"num_noises={num_noises}")
+
+    noise_field = generateNoise(int(diameter) + 1, int(diameter) + 1, num_noises)
 
     noiseLevel    = 1./4
     normingFactor = np.amax(np.absolute(noise_field))
@@ -85,17 +131,31 @@ def main():
     scale_profile[:,:,:,0] = y_z_noise_factor*scale_profile[:,:,:,2]
     scale_profile[:,:,:,1] = y_z_noise_factor*scale_profile[:,:,:,2]
 
-    # Slice the array depending on the number of heart beat cycles and number of timesteps
-    ind = slice(0, len(time_signal), int(stride))
-    ts_samples = time_signal[ind]
+    # Put some meta data from the simulation into a .json file
+    meta_data = {}
+    meta_data["timesteps"] = timesteps
+    meta_data["dt"] = dt
+    meta_data["dx"] = dx
+    meta_data["noise_factor"] = y_z_noise_factor
+    meta_data["nu"] = nu
+
+    with open("metaData.json", "w") as json_file:
+        json.dump(meta_data, json_file)
 
     # For every timestep calculate the inflow profile and write it to a json file
-    for t_idx in range(len(ts_samples) - 1):
-        inflow_vel = ts_samples[t_idx] * inflow_profile_data
-        cut = np.copy(noise_field[:,:,[t_idx,t_idx],:])
+    noise_idx = 0
+    for t_idx in range(timesteps + 1):
+        velocity_value = (dt / dx ) * interpolated_v_values(t_idx * dt)
+        inflow_vel = velocity_value * inflow_profile_data
+        cut = np.copy(noise_field[:,:,[noise_idx,noise_idx],:])
         cut = np.ascontiguousarray(cut)
-        turbulent_vel = inflow_vel - ts_samples[t_idx] * np.multiply(cut, scale_profile)
+        turbulent_vel = inflow_vel - velocity_value * np.multiply(cut, scale_profile)
         write_json(cells_original, t_idx, turbulent_vel, indices_y, indices_z)
+        
+        # To save computational power, we assume that the noise is constant
+        # for num_const_noises timesteps
+        if t_idx % num_const_noises == 0:
+            noise_idx += 1
 
 if __name__== "__main__":
         main()
