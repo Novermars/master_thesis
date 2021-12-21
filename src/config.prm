@@ -5,14 +5,14 @@ Parameters
 	remainingTimeLoggerFrequency 3.0; // in seconds
     numHeartBeatCycles 1;
     numConstNoises 300;
-    VTKwriteFrequency 500;
+    VTKwriteFrequency 2000;
     generateInflowProfile 0;
 }
 
 DomainSetup
 {
-   meshFile         AN171_colored_aligned.obj;
-   dx               0.05;
+   meshFile         AN166_colored_aligned.obj;
+   dx               1;
    cellsPerBlock    < 16, 16, 16 >;
 }
 

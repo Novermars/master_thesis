@@ -93,21 +93,23 @@ def main():
     velocity_values = np.asarray(velocity_values)
     velocity_values = velocity_values[unique_indices]
 
-    #convert from cm/s to m/s
+    # Convert from cm/s to m/s
     velocity_values = velocity_values / 100
     print(len(velocity_values))
 
     # Interpolate the velocity values
     interpolated_v_values = CubicSpline(t_vals, velocity_values, bc_type='periodic')
     x_vals = np.linspace(0, 1, 1000)
+
+    # Determine the amount of noise samples to generate
     num_noises = int((timesteps + 1) / num_const_noises) + 2
     print(f"num_noises={num_noises}")
-
+    # Generate the noise field
     noise_field = generateNoise(int(diameter) + 1, int(diameter) + 1, num_noises)
 
-    noiseLevel    = 1./4
+    noiseLevel    = 1./400
     normingFactor = np.amax(np.absolute(noise_field))
-    noise_field   = noiseLevel * noise_field/normingFactor
+    noise_field   = noiseLevel * noise_field / normingFactor
 
     # Center the noise array cells around the middle cell given from waLBerla
     points_y = np.arange(middle[1] - radius, middle[1] + radius + 1)
@@ -121,7 +123,8 @@ def main():
         indices_y[y] = idx
         indices_z[z] = idx
 
-    inflow_profile_data = inflow_profile(points_y, points_z, points_t, radius, middle, 9)
+    # Construct inflow profile
+    inflow_profile_data = inflow_profile(points_y, points_z, points_t, radius, middle, gamma=9)
 
     # In order to incorporate x and y direction noise, copy the parabolic array also to x and y
     # components + scale them if desired
@@ -145,11 +148,12 @@ def main():
     # For every timestep calculate the inflow profile and write it to a json file
     noise_idx = 0
     for t_idx in range(timesteps + 1):
-        velocity_value = (dt / dx ) * interpolated_v_values(t_idx * dt)
+        velocity_value = interpolated_v_values(t_idx * dt)
         inflow_vel = velocity_value * inflow_profile_data
         cut = np.copy(noise_field[:,:,[noise_idx,noise_idx],:])
         cut = np.ascontiguousarray(cut)
         turbulent_vel = inflow_vel - velocity_value * np.multiply(cut, scale_profile)
+        turbulent_vel = (dt / dx) * turbulent_vel
         write_json(cells_original, t_idx, turbulent_vel, indices_y, indices_z)
         
         # To save computational power, we assume that the noise is constant
