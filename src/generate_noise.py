@@ -50,6 +50,7 @@ def main():
         middle = cell_data["middle"]
         numHeartBeats = cell_data["numHeartBeats"]  
         num_const_noises = cell_data["numConstNoises"]  
+        num_const_inflow = cell_data["numConstInflow"]
         cells_original = cell_data["cells"].copy()
 
     with open('HeartBeatSignal.json') as hbs_file:
@@ -147,14 +148,14 @@ def main():
 
     # For every timestep calculate the inflow profile and write it to a json file
     noise_idx = 0
-    for t_idx in range(timesteps + 1):
+    for t_idx in range(0, timesteps + 1 + num_const_inflow, num_const_inflow):
         velocity_value = interpolated_v_values(t_idx * dt)
         inflow_vel = velocity_value * inflow_profile_data
         cut = np.copy(noise_field[:,:,[noise_idx,noise_idx],:])
         cut = np.ascontiguousarray(cut)
         turbulent_vel = inflow_vel - velocity_value * np.multiply(cut, scale_profile)
         turbulent_vel = (dt / dx) * turbulent_vel
-        write_json(cells_original, t_idx, turbulent_vel, indices_y, indices_z)
+        write_json(cells_original, int(t_idx / num_const_inflow), turbulent_vel, indices_y, indices_z)
         
         # To save computational power, we assume that the noise is constant
         # for num_const_noises timesteps

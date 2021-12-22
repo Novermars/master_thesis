@@ -174,6 +174,7 @@ Parameters constructParameters(std::shared_ptr<Config> config)
     real_t numHeartBeats = parameters.getParameter<real_t>("numHeartBeatCycles", 1);
     uint_t numConstNoises = parameters.getParameter<uint_t>("numConstNoises", 100);
     bool generateInflowProfile = parameters.getParameter<uint_t>("generateInflowProfile", 0) == 0;
+    uint_t numConstInflow = parameters.getParameter<uint_t>("numConstInflow", 10);
 
     // read domain parameters
     auto domainParameters = config->getOneBlock("DomainSetup");
@@ -185,7 +186,8 @@ Parameters constructParameters(std::shared_ptr<Config> config)
     auto stabilityCheckerParam = config->getOneBlock("StabilityChecker");
     uint_t stabilityChecker = stabilityCheckerParam.getParameter<uint_t>("StabilityChecker", 1000);
     return Parameters(dx, timesteps, VTKwriteFrequency, stabilityChecker, numConstNoises, cellsPerBlock,
-                      remainingTimeLoggerFrequency, numHeartBeats, meshFile, omega, generateInflowProfile);
+                      remainingTimeLoggerFrequency, numHeartBeats, meshFile, omega, generateInflowProfile,
+                      numConstInflow);
 }
 
 /* Loads the mesh from the file including the nonstandard vertex colors
@@ -381,6 +383,7 @@ int main(int argc, char* argv[])
             output_json["dx"] = parameters.dx_;
             output_json["omega"] = parameters.omega_;
             output_json["numConstNoises"] = parameters.numConstNoises_;
+            output_json["numConstInflow"] = parameters.numConstInflow_;
             for (std::size_t idx = 0; idx != inflowX0.size(); ++idx)
             {
                 inflowCells.push_back({inflowX0[idx], inflowY0[idx], inflowZ0[idx]});
@@ -455,7 +458,7 @@ int main(int argc, char* argv[])
 
     auto updateNoiseValues = [&](){
         noise->clear();
-        std::string fileName = "data/inflow_profile_" + std::to_string(static_cast<int>(timeTracker->getTime())) + ".json";
+        std::string fileName = "data/inflow_profile_" + std::to_string(static_cast<int>(timeTracker->getTime() / parameters.numConstInflow_)) + ".json";
         std::ifstream file_streamNoise(fileName);
         nlohmann::json inflow_profile;
         file_streamNoise >> inflow_profile;
@@ -498,6 +501,8 @@ int main(int argc, char* argv[])
         /// to be not the case when using smaller dx
         auto vtkOutput = vtk::createVTKOutput_BlockData(*blocks, "cumulant_mrt_velocity_field", parameters.vtkWriteFrequency_, 0,
                                                         true, path, "simulation_step", false, true, true, false, 0);
+
+        vtkOutput->setSamplingResolution(5);
 
         auto velWriter = make_shared< field::VTKWriter< VectorField_T > >(velocityFieldId, "Velocity");
         vtkOutput->addCellDataWriter(velWriter);
