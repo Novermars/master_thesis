@@ -5,7 +5,7 @@ import numpy as np
 import json
 from script.main_NoiseGenerator import generateNoise
 
-import numba as nb
+#import numba as nb
 import os
 
 def main():
