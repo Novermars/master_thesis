@@ -138,12 +138,18 @@ public:
                             std::pow(inflowCell.z() - std::get<2>(middle_), 2);
         real_t scaleFactor = (gamma_ + 2) / gamma_ * (1 - std::pow(distanceSq / radiusSq_, gamma_));
         scaleFactor = std::max(scaleFactor, 0.0);
-        //std::cout << scaleFactor << '\n';
-        auto noiseVector = 0 * findNoise(inflowCell);
+        
+        // Noise is scaled to have max_val = 1 for all time values
+        auto noiseVector = findNoise(inflowCell);
+        // Assume 10% noise of the center velocity in all directions
+        Vector3<real_t> noiseScaling = Vector3<real_t>{0.1, 0.1, 0.1 };
+        for (int idx = 0; idx != 3; ++idx)
+            noiseVector[idx] = *centerVelocity_ * noiseScaling[idx] * noiseVector[idx];
         
         Vector3<real_t> velocity{-*centerVelocity_, 0, 0};
+        //std::cout << scaleFactor * (dt_ / dx_) * (velocity - noiseVector) << '\n';
+        return scaleFactor * (dt_ / dx_) * (velocity - noiseVector);
 
-        return scaleFactor * (dt_ / dx_) * (velocity - noiseVector / 400);
 
     }
 private:

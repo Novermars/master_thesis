@@ -8,16 +8,6 @@ from script.main_NoiseGenerator import generateNoise
 import numba as nb
 import os
 
-def coord2index(coord, shape):
-    test0 = np.asarray(shape[1:])[::-1]
-    print(f"{test0=}")
-    test1 = (test0.cumprod()[::-1],[1])
-    print(f"{test1=}")
-    test2 = np.concatenate(test1)
-    print(f"{test2=}")
-    print(f"{coord=}")
-    return test2.dot(coord)
-
 def main():
     # read data
     with open('cellOutput.json') as data_file:
@@ -29,7 +19,6 @@ def main():
         radius_y = cell_data["radiusY"]
         radius_z = cell_data["radiusZ"]
         middle = cell_data["middle"]
-    print(middle)
 
     with open('HeartBeatSignal.json') as hbs_file:
         hbs_data = json.loads(hbs_file.read())
@@ -50,8 +39,9 @@ def main():
     num_noises = int((timesteps + 1) / num_const_noises)
     noise_field = generateNoise(int(diameter) + 1, int(diameter) + 1, num_noises)
 
-    normingFactor = np.amax(np.absolute(noise_field))
-    noise_field   = noise_field / normingFactor
+    for idx in range(num_noises):
+        normingFactor = np.amax(np.absolute(noise_field[:,:, idx,:]))
+        noise_field[:,:,idx,:]   = noise_field[:,:,idx,:] / normingFactor
 
     for idx in range(num_noises):
         np.save(f"data/noise_field_{idx}.npy", noise_field[:,:,idx,:], allow_pickle=False)

@@ -3,10 +3,10 @@ Parameters
 	omega           1.8;
 	timesteps       1000;
 	remainingTimeLoggerFrequency 3.0; // in seconds
-    numHeartBeatCycles 2;
-    numConstNoises 1000;
+    numHeartBeatCycles 0.01;
+    numConstNoises 10;
     numConstInflow  300;
-    VTKwriteFrequency 2000;
+    VTKwriteFrequency 20;
     generateInflowProfile 0;
 }
 
