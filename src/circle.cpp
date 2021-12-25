@@ -52,7 +52,9 @@ Circle::Coords Circle::findMiddle()
     else
         middle_z = (highest_z - lowest_z) / 2 + 1;
 
-    std::cout << middle_x << ' ' << middle_y << ' ' << middle_z << '\n';
+    //std::cout << middle_x << ' ' << middle_y << ' ' << middle_z << '\n';
+    radiusY_ = middle_y;
+    radiusZ_ = middle_z;
     // Assumes that the x coordinates are constant!!
     radius_ = std::max(middle_y, middle_z);
     std::cout << "Radius inside circle: " << radius_ << '\n';
@@ -64,7 +66,17 @@ Circle::Coords Circle::middle() const
     return middleCell_;
 }
 
-walberla::real_t Circle::radius() const
+walberla::uint_t Circle::radius() const
 {
     return radius_;
+}
+
+walberla::uint_t Circle::radiusY() const
+{
+    return radiusY_;
+}
+
+walberla::uint_t Circle::radiusZ() const
+{
+    return radiusZ_;
 }

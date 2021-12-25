@@ -33,6 +33,8 @@
 #include "circle.h"
 
 #include "json.hpp"
+#include "npy.hpp"
+#include "spline.h"
 
 #include <iostream>
 #include <cmath>
@@ -68,39 +70,103 @@ struct key_hash : public std::unary_function<NLO::Circle::Coords, std::size_t>
         return seed;
     }
 };
+
+// Function that returns the inflow velocity in m/s calculated from
+// Andreas' data using a trigonometric interpolation scheme
+// for which the coefficients are calculated in python
+tk::spline getInterpolater()
+{
+    nlohmann::json heartBeatData_json;
+    std::ifstream heartBeatFile{"cleanHBData.json"};
+    heartBeatFile >> heartBeatData_json;
+
+    auto t_vals = heartBeatData_json["t"].get<std::vector<real_t>>();
+    auto v_vals = heartBeatData_json["v"].get<std::vector<real_t>>();
+
+    tk::spline interpolater(t_vals, v_vals);
+    return interpolater;
+}
 } //end of namespace NLO
 
 class InflowProfile
 {
-public:
+    NLO::Circle::Coords middle_;
+    uint_t radius_;
+    uint_t radiusSq_;
+    uint_t radiusY_;
+    uint_t radiusZ_;
+    real_t dt_;
+    real_t dx_;
+    std::vector<real_t>* noise_values_;
+    real_t gamma_;
+    std::shared_ptr<lbm::TimeTracker> timeTracker_;
+    real_t* centerVelocity_;
+    tk::spline interpolated_;
 
-    InflowProfile(std::shared_ptr<std::unordered_map<NLO::Circle::Coords, 
-                                                     Vector3<real_t>, NLO::key_hash>> const& values_map) 
+public:
+    InflowProfile(NLO::Circle::Coords const& middle, uint_t radiusY, uint_t radiusZ, 
+                  real_t dt, real_t dx, real_t gamma,
+                  std::shared_ptr<lbm::TimeTracker> timeTracker,
+                  std::vector<real_t>* noise_values,
+                  real_t* centerVelocity) 
     :
-        values_map_(values_map)
+        middle_{middle},
+        radiusY_{radiusY},
+        radiusZ_{radiusZ},
+        dt_{dt},
+        dx_{dx},
+        noise_values_{noise_values},
+        gamma_{gamma},
+        timeTracker_{timeTracker}
     {        
-        std::string fileName{"data/inflow_profile_0.json"};
-        std::ifstream file_streamNoise(fileName);
-        nlohmann::json values;
-        file_streamNoise >> values;
-        for (std::size_t idx = 0; idx != values.size(); ++idx)
-        {
-            values_map_->insert({{static_cast<int>(values[idx][0]), 
-                                  static_cast<int>(values[idx][1]), 
-                                  static_cast<int>(values[idx][2])}, 
-                                  Vector3<real_t>{values[idx][3], 
-                                                  values[idx][4], 
-                                                  values[idx][5]}});
-        }
+        radius_ = std::max(radiusY_, radiusZ_);
+        radiusSq_ = radius_ * radius_;
+
+        // load noise values from the first file
+        std::string path = "data/noise_field_0.npy";
+        centerVelocity_ = centerVelocity;
+        std::vector<unsigned long> shape;
+        bool fortran_order = false;
+        npy::LoadArrayFromNumpy<double>(path, shape, fortran_order, *noise_values_);
     }
 
     Vector3< real_t > operator()( const Cell& pos, const shared_ptr< StructuredBlockForest >& SbF, IBlock& block ) {
         auto inflowCell = pos;
         SbF->transformBlockLocalToGlobalCell(inflowCell, block);
-        return (*values_map_)[NLO::Circle::Coords{inflowCell.x(), inflowCell.y(), inflowCell.z()}];
+        real_t distanceSq = std::pow(inflowCell.x() - std::get<0>(middle_), 2) +
+                            std::pow(inflowCell.y() - std::get<1>(middle_), 2) +
+                            std::pow(inflowCell.z() - std::get<2>(middle_), 2);
+        real_t scaleFactor = (gamma_ + 2) / gamma_ * (1 - std::pow(distanceSq / radiusSq_, gamma_));
+        scaleFactor = std::max(scaleFactor, 0.0);
+        //std::cout << scaleFactor << '\n';
+        auto noiseVector = 0 * findNoise(inflowCell);
+        
+        Vector3<real_t> velocity{-*centerVelocity_, 0, 0};
+
+        return scaleFactor * (dt_ / dx_) * (velocity - noiseVector / 400);
+
     }
 private:
-    std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> values_map_;
+    // Returns the noise value corresponding to the cell's location in the inflow bdy
+    // Assumes that we have a constant x value
+    Vector3<real_t> findNoise(Cell const& globalCell)
+    {
+        // We want to find noise_values_[y, z, {0,1,2}]
+        int yCoord = std::abs(globalCell.y() - std::get<1>(middle_));
+        int zCoord = std::abs(globalCell.z() - std::get<2>(middle_));
+        real_t x = (*noise_values_)[getIndex(yCoord, zCoord, 0)];
+        real_t y = (*noise_values_)[getIndex(yCoord, zCoord, 1)];
+        real_t z = (*noise_values_)[getIndex(yCoord, zCoord, 2)];
+        return Vector3<real_t>{x, y, z};
+    }
+
+    // Converts 3D index to 1D index in flat array
+    int getIndex(int yCoord, int zCoord, int direction)
+    {
+        uint_t diameter = (radius_ * 2 + 1);
+        return 3 * yCoord * diameter + 3 * zCoord + direction;
+    }
+
 }; 
 
 /*
@@ -113,6 +179,7 @@ constexpr Mesh::Color outflowColor{0, 42, 255};
 
 // AN182
 //std::string modelName = "AN182";
+
 constexpr Mesh::Color noSlipColor{255, 255, 255};
 constexpr Mesh::Color inflowColor{255, 0, 42};
 constexpr Mesh::Color outflowColor{0, 98, 255};
@@ -369,7 +436,7 @@ int main(int argc, char* argv[])
 
         std::vector<NLO::Circle::Coords> inflowCells;
         NLO::Circle::Coords middle;
-        real_t radius;
+        uint_t radius;
 
         MPI_Barrier(MPI_COMM_WORLD); // make sure that all the ranks are synchronised here
         if (mpi::MPIManager::instance()->rank() == 0)
@@ -388,19 +455,22 @@ int main(int argc, char* argv[])
             {
                 inflowCells.push_back({inflowX0[idx], inflowY0[idx], inflowZ0[idx]});
                 // Put the cell's coordinates in the json file for the python program to read it
-                output_json["cells"][idx] = {inflowX0[idx], inflowY0[idx], inflowZ0[idx]};
             }
 
             NLO::Circle circle = NLO::Circle(inflowCells);
             middle = circle.middle();
-            radius = circle.radius();   
+            radius = circle.radius();
+            auto radiusY = circle.radiusY();   
+            auto radiusZ = circle.radiusZ();
             output_json["diameter"] = 2 * radius;
             output_json["middle"] = {std::get<0>(middle), std::get<1>(middle), std::get<2>(middle)};
+            output_json["radiusY"] = radiusY;
+            output_json["radiusZ"] = radiusZ;
             output_stream << output_json;
             }
 
             // Now call the Python program which generates the inflow profile including the noise
-            if (std::system("python3 generate_noise.py") == -1)
+            if (std::system("python3 generate_noise_array.py") == -1)
             {
                 WALBERLA_LOG_DEVEL_VAR("Error in Python script, exiting!")
                 MPI_Abort(MPI_COMM_WORLD, -1);
@@ -409,12 +479,24 @@ int main(int argc, char* argv[])
     }    
     // Make sure that we finish the preprocessing before we continue
     MPI_Barrier(MPI_COMM_WORLD);
+    nlohmann::json metaData_json;
+    std::ifstream metaDataFile{"metaData.json"};
+    metaDataFile >> metaData_json;
+    auto timeSteps = metaData_json["timesteps"];
+    real_t dt = metaData_json["dt"];
+    real_t dx = metaData_json["dx"];
+    uint_t radiusY = metaData_json["radiusY"];
+    uint_t radiusZ = metaData_json["radiusZ"];
+    NLO::Circle::Coords middle = {metaData_json["middle"][0], metaData_json["middle"][1], metaData_json["middle"][2]};
+    real_t gamma = 9;
+
+    auto interpolater = NLO::getInterpolater();
+    real_t centerVelocity = interpolater(0);
 
     std::shared_ptr< lbm::TimeTracker > timeTracker = std::make_shared< lbm::TimeTracker >();
-    std::shared_ptr<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>> noise 
-        = std::make_shared<std::unordered_map<NLO::Circle::Coords, Vector3<real_t>, NLO::key_hash>>();
+    std::vector<real_t> noiseValues;
     std::function< Vector3< real_t >(const Cell&, const shared_ptr< StructuredBlockForest >&, IBlock&) >
-        inflowProfile = InflowProfile(noise);
+        inflowProfile = InflowProfile(middle, radiusY, radiusZ, dt, dx, gamma, timeTracker, &noiseValues, &centerVelocity);
 
     NoSlip_T noSlip(blocks, pdfFieldId);
     DynamicUBB_T dynamicUBB(blocks, pdfFieldId, inflowProfile);
@@ -423,11 +505,6 @@ int main(int argc, char* argv[])
     noSlip.fillFromFlagField<FlagField_T>(blocks, flagFieldId, NoSlipFlagUID, FluidFlagUID);
     dynamicUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
     outflow.fillFromFlagField<FlagField_T>(blocks, flagFieldId, OutflowUID, FluidFlagUID);
-
-    nlohmann::json metaData_json;
-    std::ifstream metaDataFile{"metaData.json"};
-    metaDataFile >> metaData_json;
-    auto timeSteps = metaData_json["timesteps"];
 
     WALBERLA_ROOT_SECTION()
     {
@@ -457,20 +534,20 @@ int main(int argc, char* argv[])
     };
 
     auto updateNoiseValues = [&](){
-        noise->clear();
-        std::string fileName = "data/inflow_profile_" + std::to_string(static_cast<int>(timeTracker->getTime() / parameters.numConstInflow_)) + ".json";
-        std::ifstream file_streamNoise(fileName);
-        nlohmann::json inflow_profile;
-        file_streamNoise >> inflow_profile;
-        for (std::size_t idx = 0; idx != inflow_profile.size(); ++idx)
+        // Update only every numConstNoises steps
+        auto time = static_cast<int>(timeTracker->getTime());
+        if (time % parameters.numConstNoises_ == 0)
         {
-            noise->insert({{static_cast<int>(inflow_profile[idx][0]),
-                            static_cast<int>(inflow_profile[idx][1]),
-                            static_cast<int>(inflow_profile[idx][2])}, 
-                            Vector3<real_t>{inflow_profile[idx][3], 
-                                            inflow_profile[idx][4], 
-                                            inflow_profile[idx][5]}});
+            int noiseIdx = time / parameters.numConstNoises_;
+            std::string path = "data/noise_field_" + std::to_string(noiseIdx) + ".npy";
+            std::vector<unsigned long> shape;
+            bool fortran_order = false;
+            npy::LoadArrayFromNumpy<double>(path, shape, fortran_order, noiseValues);
         }
+        // Calculate the velocity at the center
+        // We map the values to [0, 1) due to periodicity 
+        centerVelocity = interpolater(std::fmod(time * dt, 1.0));
+        //std::cout << time * dt << " cV:" << centerVelocity << '\n';
     };
 
     timeloop.addFuncAfterTimeStep(updateNoiseValues, "update noise values");
@@ -502,7 +579,7 @@ int main(int argc, char* argv[])
         auto vtkOutput = vtk::createVTKOutput_BlockData(*blocks, "cumulant_mrt_velocity_field", parameters.vtkWriteFrequency_, 0,
                                                         true, path, "simulation_step", false, true, true, false, 0);
 
-        vtkOutput->setSamplingResolution(5);
+        //vtkOutput->setSamplingResolution(5);
 
         auto velWriter = make_shared< field::VTKWriter< VectorField_T > >(velocityFieldId, "Velocity");
         vtkOutput->addCellDataWriter(velWriter);
