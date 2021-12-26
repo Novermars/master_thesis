@@ -136,7 +136,7 @@ public:
         real_t distanceSq = std::pow(inflowCell.x() - std::get<0>(middle_), 2) +
                             std::pow(inflowCell.y() - std::get<1>(middle_), 2) +
                             std::pow(inflowCell.z() - std::get<2>(middle_), 2);
-        real_t scaleFactor = (gamma_ + 2) / gamma_ * (1 - std::pow(distanceSq / radiusSq_, gamma_));
+        real_t scaleFactor = (gamma_ + 2) / gamma_ * (1 - std::pow(distanceSq / static_cast<real_t>(radiusSq_), gamma_));
         scaleFactor = std::max(scaleFactor, 0.0);
         
         // Noise is scaled to have max_val = 1 for all time values
@@ -169,7 +169,7 @@ private:
     // Converts 3D index to 1D index in flat array
     int getIndex(int yCoord, int zCoord, int direction)
     {
-        uint_t diameter = (radius_ * 2 + 1);
+        int diameter = static_cast<int>(radius_ * 2) + 1;
         return 3 * yCoord * diameter + 3 * zCoord + direction;
     }
 
@@ -187,8 +187,8 @@ constexpr Mesh::Color outflowColor{0, 42, 255};
 //std::string modelName = "AN182";
 
 constexpr Mesh::Color noSlipColor{255, 255, 255};
-constexpr Mesh::Color inflowColor{255, 0, 42};
-constexpr Mesh::Color outflowColor{0, 98, 255};
+constexpr Mesh::Color inflowColor{255, 0, 0};
+constexpr Mesh::Color outflowColor{0, 0, 255};
 
 // Number of ghost layers
 uint_t const numGhostLayers = uint_t(1);
@@ -544,7 +544,7 @@ int main(int argc, char* argv[])
         auto time = static_cast<int>(timeTracker->getTime());
         if (time % parameters.numConstNoises_ == 0)
         {
-            int noiseIdx = time / parameters.numConstNoises_;
+            int noiseIdx = static_cast<int>( time / parameters.numConstNoises_);
             std::string path = "data/noise_field_" + std::to_string(noiseIdx) + ".npy";
             std::vector<unsigned long> shape;
             bool fortran_order = false;
@@ -575,17 +575,24 @@ int main(int argc, char* argv[])
                 ) // WALBERLA_FOR_ALL_CELLS
         };
     timeloop.add() << Sweep(zeroSetterFunction, "Zerosetter");
+    
+    timeloop.addFuncAfterTimeStep(makeSharedFunctor(field::makeStabilityChecker<PdfField_T>(
+	blocks, velocityFieldId, parameters.stabilityCheckFrequency_)));
 
     if (parameters.vtkWriteFrequency_ > 0)
     {
-        std::string const path = "vtk_out/";
+        std::string const path = "/mnt/data01/overmars/vtk_out/";
         /// REMARK: force_pvtu must be set to true; otherwise the "pvti" format is used and paraview can only display
         /// pvti files if the domain is partitioned in blocks with a block for EVERY part of the domain; this is likely
         /// to be not the case when using smaller dx
         auto vtkOutput = vtk::createVTKOutput_BlockData(*blocks, "cumulant_mrt_velocity_field", parameters.vtkWriteFrequency_, 0,
                                                         true, path, "simulation_step", false, true, true, false, 0);
-
-        //vtkOutput->setSamplingResolution(5);
+	// Set the sampling size for the output
+	// The output size is divided by resolution in all directions
+	// So the final size is resolution^3 times smaller
+	constexpr double resolution = 2;
+	static_assert(resolution >= 1, "You probably want to have this number be at least 1");
+        vtkOutput->setSamplingResolution(resolution);
 
         auto velWriter = make_shared< field::VTKWriter< VectorField_T > >(velocityFieldId, "Velocity");
         vtkOutput->addCellDataWriter(velWriter);

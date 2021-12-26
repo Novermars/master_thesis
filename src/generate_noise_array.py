@@ -35,8 +35,10 @@ def main():
     dt = 1 / 3 * (1 / omega - 0.5) * (dx ** 2) / nu # s
     timesteps = int(numHeartBeats / dt)
     print(f"{dt/dx=}")
+    print(f"{timesteps=}")
 
     num_noises = int((timesteps + 1) / num_const_noises)
+    print(f"{num_noises=}")
     noise_field = generateNoise(int(diameter) + 1, int(diameter) + 1, num_noises)
 
     for idx in range(num_noises):
