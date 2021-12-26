@@ -1,2 +1,3 @@
 build/*
 src/DRD_Wind/data/*
+*.pyc
