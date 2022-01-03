@@ -3,17 +3,17 @@ Parameters
 	omega           1.8;
 	timesteps       1000;
 	remainingTimeLoggerFrequency 3.0; // in seconds
-    numHeartBeatCycles 1;
-    numConstNoises 300;
-    numConstInflow  20;
-    VTKwriteFrequency 8;
+    numHeartBeatCycles 0.01;
+    numConstNoises 10;
+    numConstInflow  300;
+    VTKwriteFrequency 20;
     generateInflowProfile 0;
 }
 
 DomainSetup
 {
    meshFile         AN166_colored_aligned.obj;
-   dx               0.5;
+   dx               0.05;
    cellsPerBlock    < 16, 16, 16 >;
 }
 

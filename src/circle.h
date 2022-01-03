@@ -15,12 +15,16 @@ public:
     Circle();
     Circle(std::vector<Coords> const& coordinates);
     Coords middle() const;
-    walberla::real_t radius() const;
+    walberla::uint_t radius() const;
+    walberla::uint_t radiusY() const;
+    walberla::uint_t radiusZ() const;
     //friend std::ostream& operator<< (std::ostream& stream, const Circle& matrix);
 private:
     std::vector<Coords> coordinates_;
     Coords middleCell_;
-    walberla::real_t radius_;
+    walberla::uint_t radius_;
+    walberla::uint_t radiusY_;
+    walberla::uint_t radiusZ_;
 
     Coords findMiddle();
 };
