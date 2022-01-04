@@ -114,8 +114,8 @@ auto determineInputCells(std::shared_ptr<StructuredBlockForest> blocks, BlockDat
         return std::tuple<std::vector<int>, std::vector<int>, std::vector<int>>({inflowX, inflowY, inflowZ});
 }
 
-void writeMetaData(Parameters parameters, std::vector<int> inflowX0,
-                   std::vector<int> inflowY0, std::vector<int> inflowZ0 )
+void writeMetaData(Parameters parameters, std::vector<int> const& inflowX0,
+                   std::vector<int> const& inflowY0, std::vector<int> const& inflowZ0 )
 {
     std::vector<NLO::Circle::Coords> inflowCells;
     NLO::Circle::Coords middle;
