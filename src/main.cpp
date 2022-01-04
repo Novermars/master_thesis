@@ -458,6 +458,7 @@ int main(int argc, char* argv[])
         MPI_Barrier(MPI_COMM_WORLD); // make sure that all the ranks are synchronised here
         if (mpi::MPIManager::instance()->rank() == 0)
         {
+            // 
             NLO::writeMetaData(parameters, inflowX0, inflowY0, inflowZ0);
 
             // Now call the Python program which generates the noise array
@@ -471,6 +472,7 @@ int main(int argc, char* argv[])
 
     // Make sure that we finish the preprocessing before we continue
     MPI_Barrier(MPI_COMM_WORLD);
+
     nlohmann::json metaData_json;
     std::ifstream metaDataFile{"metaData.json"};
     metaDataFile >> metaData_json;
@@ -536,7 +538,7 @@ int main(int argc, char* argv[])
             npy::LoadArrayFromNumpy<double>(path, shape, fortran_order, noiseValues);
         }
         // Calculate the velocity at the center
-        // We map the values to [0, 1) due to periodicity 
+        // We map the time values to [0, 1) due to periodicity 
         centerVelocity = interpolater(std::fmod(time * dt, 1.0));
     };
 
