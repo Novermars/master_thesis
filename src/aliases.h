@@ -13,7 +13,6 @@
 
 #include "CumulantMRTNoSlip.h"
 #include "CumulantMRTOutflow.h"
-//#include "CumulantMRTSimpleUBB.h"
 #include "CumulantMRTDynamicUBB.h"
 #include "CumulantMRTPackInfo.h"
 #include "CumulantMRTSweep.h"
@@ -31,11 +30,29 @@ namespace walberla
     using PackInfo_T = walberla::pystencils::CumulantMRTPackInfo;
     using CumulantMRTSweep = walberla::pystencils::CumulantMRTSweep;
     using NoSlip_T = walberla::lbm::CumulantMRTNoSlip;
-    //using SimpleUBB_T = walberla::lbm::CumulantMRTSimpleUBB;
     using DynamicUBB_T = walberla::lbm::CumulantMRTDynamicUBB;
     using Outflow_T = walberla::lbm::CumulantMRTOutflow;
 
     using Mesh = walberla::mesh::TriangleMesh;
 }
+
+// Flags for the boundary and fluid cells
+const walberla::FlagUID FluidFlagUID("Fluid Flag");
+const walberla::FlagUID NoSlipFlagUID("NoSlip Flag");
+const walberla::FlagUID OutflowUID("Outflow Flag");
+const walberla::FlagUID InflowUID("Inflow Flag");
+
+// UIDs for the boundary and fluid cells
+const walberla::BoundaryUID NoSlipBoundaryUID("NoSlip Boundary");
+const walberla::BoundaryUID OutflowBoundaryUID("Outflow Boundary");
+const walberla::BoundaryUID InflowBoundaryUID("Inflow Boundary");
+
+// Standarized coloring for the mesh
+const walberla::Mesh::Color noSlipColor{255, 255, 255}; // White
+const walberla::Mesh::Color inflowColor{255, 0, 0};     // Red  
+const walberla::Mesh::Color outflowColor{0, 0, 255};    // Blue
+
+// Number of ghost layers
+walberla::uint_t const numGhostLayers = walberla::uint_t(1);
 
 #endif

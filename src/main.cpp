@@ -39,21 +39,11 @@
 #include <iostream>
 #include <cmath>
 
-//#include <Python.h>
-
 using namespace walberla;
-
-FlagUID const FluidFlagUID("Fluid Flag");
-FlagUID const NoSlipFlagUID("NoSlip Flag");
-FlagUID const OutflowUID("Outflow Flag");
-FlagUID const InflowUID("Inflow Flag");
-
-BoundaryUID const NoSlipBoundaryUID("NoSlip Boundary");
-BoundaryUID const OutflowBoundaryUID("Outflow Boundary");
-BoundaryUID const InflowBoundaryUID("Inflow Boundary");
 
 namespace NLO
 {
+// Hash function for std::unordered_map<NLO::Circle::Coords, T>
 struct key_hash : public std::unary_function<NLO::Circle::Coords, std::size_t>
 {
     std::size_t operator()(const NLO::Circle::Coords& coord) const
@@ -71,9 +61,8 @@ struct key_hash : public std::unary_function<NLO::Circle::Coords, std::size_t>
     }
 };
 
-// Function that returns the inflow velocity in m/s calculated from
-// Andreas' data using a trigonometric interpolation scheme
-// for which the coefficients are calculated in python
+// Function that returns the a cublic spline interpolator to find the
+// missing values from Andreas' data
 tk::spline getInterpolater()
 {
     nlohmann::json heartBeatData_json;
@@ -86,6 +75,82 @@ tk::spline getInterpolater()
     tk::spline interpolater(t_vals, v_vals);
     return interpolater;
 }
+
+auto determineInputCells(std::shared_ptr<StructuredBlockForest> blocks, BlockDataID flagFieldId)
+{
+        // We want to calculate the radius and the middle point of the circle that describes the inflow
+        // For that we loop over all blocks in the SbF on the rank, and then in every block we loop over 
+        // all the cells without the ghost nodes and check if the cell is part of the inflow boundary
+        // If that's the case, we save its global coordinates 
+        std::vector<Block const*> block_vec;
+        int level = 0;
+        blocks->getBlocks(block_vec, level);
+        std::vector<int> inflowX;
+        std::vector<int> inflowY;
+        std::vector<int> inflowZ;
+        for (auto const block: block_vec)
+        {
+            auto* flagField = block->getData<FlagField_T>(flagFieldId);
+            flag_t inflowFlag = flagField->getFlag(InflowUID);
+            
+            for (cell_idx_t x = 0; x < static_cast<int>(flagField->xSize()); ++x)
+            {
+                for (cell_idx_t y = 0; y < static_cast<int>(flagField->ySize()); ++y)
+                {
+                    for (cell_idx_t z = 0; z < static_cast<int>(flagField->zSize()); ++z)
+                    {
+                        if (flagField->isFlagSet(x, y, z, inflowFlag))
+                        {
+                            Cell cell{x, y, z};
+                            blocks->transformBlockLocalToGlobalCell(cell, *block);
+                            inflowX.push_back(static_cast<int>(cell.x()));
+                            inflowY.push_back(static_cast<int>(cell.y()));
+                            inflowZ.push_back(static_cast<int>(cell.z()));
+                        }
+                    }
+                }
+            }
+        }
+        return std::tuple<std::vector<int>, std::vector<int>, std::vector<int>>({inflowX, inflowY, inflowZ});
+}
+
+void writeMetaData(Parameters parameters, std::vector<int> inflowX0,
+                   std::vector<int> inflowY0, std::vector<int> inflowZ0 )
+{
+    std::vector<NLO::Circle::Coords> inflowCells;
+    NLO::Circle::Coords middle;
+    uint_t radius;
+
+    std::string outputFile{"cellOutput.json"};
+    std::ofstream output_stream{outputFile};
+    nlohmann::json output_json;
+
+    output_json["timesteps"] = parameters.timeSteps_;
+    output_json["numHeartBeats"] = parameters.numHeartBeats_;
+    output_json["dx"] = parameters.dx_;
+    output_json["omega"] = parameters.omega_;
+    output_json["numConstNoises"] = parameters.numConstNoises_;
+    output_json["numConstInflow"] = parameters.numConstInflow_;
+
+    for (std::size_t idx = 0; idx != inflowX0.size(); ++idx)
+    {
+        inflowCells.push_back({inflowX0[idx], inflowY0[idx], inflowZ0[idx]});
+    }
+
+    NLO::Circle circle = NLO::Circle(inflowCells);
+    middle = circle.middle();
+    radius = circle.radius();
+    auto radiusY = circle.radiusY();   
+    auto radiusZ = circle.radiusZ();
+
+    output_json["diameter"] = 2 * radius;
+    output_json["middle"] = {std::get<0>(middle), std::get<1>(middle), std::get<2>(middle)};
+    output_json["radiusY"] = radiusY;
+    output_json["radiusZ"] = radiusZ;
+
+    output_stream << output_json;    
+}
+
 } //end of namespace NLO
 
 class InflowProfile
@@ -146,12 +211,11 @@ public:
         for (int idx = 0; idx != 3; ++idx)
             noiseVector[idx] = *centerVelocity_ * noiseScaling[idx] * noiseVector[idx];
         
+        // Main flow is in the -x direction, other directions only have noise
         Vector3<real_t> velocity{-*centerVelocity_, 0, 0};
-        //std::cout << scaleFactor * (dt_ / dx_) * (velocity - noiseVector) << '\n';
         return scaleFactor * (dt_ / dx_) * (velocity - noiseVector);
-
-
     }
+
 private:
     // Returns the noise value corresponding to the cell's location in the inflow bdy
     // Assumes that we have a constant x value
@@ -174,24 +238,6 @@ private:
     }
 
 }; 
-
-/*
-// AN181
-std::string modelName = "AN181";
-constexpr Mesh::Color noSlipColor{255, 255, 255};
-constexpr Mesh::Color inflowColor{255, 0, 12};
-constexpr Mesh::Color outflowColor{0, 42, 255};
-*/
-
-// AN182
-//std::string modelName = "AN182";
-
-constexpr Mesh::Color noSlipColor{255, 255, 255};
-constexpr Mesh::Color inflowColor{255, 0, 0};
-constexpr Mesh::Color outflowColor{0, 0, 255};
-
-// Number of ghost layers
-uint_t const numGhostLayers = uint_t(1);
 
 /*
  * waLBerla expects that the faces are colored, not the vertices
@@ -294,7 +340,6 @@ std::shared_ptr<StructuredBlockForest> createBlockForest(Parameters const& param
                                                          std::shared_ptr<mesh::DistanceOctree<Mesh>> distanceOctree
                                                         )
 {
-  /// REMARK: we usually leave dx here at 1 and scale the mesh instead (see below)
   mesh::ComplexGeometryStructuredBlockforestCreator bfc(aabb, Vector3<real_t>(real_c(1)),
                                                         mesh::makeExcludeMeshExterior(distanceOctree, real_c(1))
                                                        );
@@ -336,8 +381,7 @@ int main(int argc, char* argv[])
     // And one for the mesoscopic particule distribution function values;
     BlockDataID pdfFieldId      = field::addToStorage< PdfField_T >(blocks, "pdf field", real_c(0.0), field::fzyx);
 
-    /// REMARK: this must not be skipped; there are two pdfFields (incl. a temporary one for pointer swapping) and both
-    /// must have meaningful initial values
+    // Set the values of both the tmp and real field to a default value for the density rho
     real_t rho = real_c(1);
     pystencils::InitialPDFsSetter pdfSetter(pdfFieldId, velocityFieldId, rho);
 
@@ -401,81 +445,22 @@ int main(int argc, char* argv[])
         {
             WALBERLA_LOG_DEVEL("Generating new inflow profile!");
         }
-        // We want to calculate the radius and the middle point of the circle that describes the inflow
-        // For that we loop over all blocks in the SbF on the rank, and then in every block we loop over 
-        // all the cells without the ghost nodes and check if the cell is part of the inflow boundary
-        // If that's the case, we save its global coordinates 
-        std::vector<Block const*> block_vec;
-        int level = 0;
-        blocks->getBlocks(block_vec, level);
-        std::vector<int> inflowX;
-        std::vector<int> inflowY;
-        std::vector<int> inflowZ;
-        for (auto const block: block_vec)
-        {
-            auto* flagField = block->getData<FlagField_T>(flagFieldId);
-            flag_t inflowFlag = flagField->getFlag(InflowUID);
-            
-            for (cell_idx_t x = 0; x < static_cast<int>(flagField->xSize()); ++x)
-            {
-                for (cell_idx_t y = 0; y < static_cast<int>(flagField->ySize()); ++y)
-                {
-                    for (cell_idx_t z = 0; z < static_cast<int>(flagField->zSize()); ++z)
-                    {
-                        if (flagField->isFlagSet(x, y, z, inflowFlag))
-                        {
-                            Cell cell{x, y, z};
-                            blocks->transformBlockLocalToGlobalCell(cell, *block);
-                            inflowX.push_back(static_cast<int>(cell.x()));
-                            inflowY.push_back(static_cast<int>(cell.y()));
-                            inflowZ.push_back(static_cast<int>(cell.z()));
-                        }
-                    }
-                }
-            }
-        }
+
+        // fancy structured binding 
+        auto [inflowX, inflowY, inflowZ] = NLO::determineInputCells(blocks, flagFieldId);
+
         // We then send the global coordinates of the cells belonging to the inflow boundary
         // to rank zero
         std::vector<int> inflowX0 = mpi::gatherv(inflowX, 0, MPI_COMM_WORLD);
         std::vector<int> inflowY0 = mpi::gatherv(inflowY, 0, MPI_COMM_WORLD);
         std::vector<int> inflowZ0 = mpi::gatherv(inflowZ, 0, MPI_COMM_WORLD);
 
-        std::vector<NLO::Circle::Coords> inflowCells;
-        NLO::Circle::Coords middle;
-        uint_t radius;
-
         MPI_Barrier(MPI_COMM_WORLD); // make sure that all the ranks are synchronised here
         if (mpi::MPIManager::instance()->rank() == 0)
         {
-            { // Makes sure file is closed before running python script
-            std::string outputFile{"cellOutput.json"};
-            std::ofstream output_stream{outputFile};
-            nlohmann::json output_json;
-            output_json["timesteps"] = parameters.timeSteps_;
-            output_json["numHeartBeats"] = parameters.numHeartBeats_;
-            output_json["dx"] = parameters.dx_;
-            output_json["omega"] = parameters.omega_;
-            output_json["numConstNoises"] = parameters.numConstNoises_;
-            output_json["numConstInflow"] = parameters.numConstInflow_;
-            for (std::size_t idx = 0; idx != inflowX0.size(); ++idx)
-            {
-                inflowCells.push_back({inflowX0[idx], inflowY0[idx], inflowZ0[idx]});
-                // Put the cell's coordinates in the json file for the python program to read it
-            }
+            NLO::writeMetaData(parameters, inflowX0, inflowY0, inflowZ0);
 
-            NLO::Circle circle = NLO::Circle(inflowCells);
-            middle = circle.middle();
-            radius = circle.radius();
-            auto radiusY = circle.radiusY();   
-            auto radiusZ = circle.radiusZ();
-            output_json["diameter"] = 2 * radius;
-            output_json["middle"] = {std::get<0>(middle), std::get<1>(middle), std::get<2>(middle)};
-            output_json["radiusY"] = radiusY;
-            output_json["radiusZ"] = radiusZ;
-            output_stream << output_json;
-            }
-
-            // Now call the Python program which generates the inflow profile including the noise
+            // Now call the Python program which generates the noise array
             if (std::system("python3 generate_noise_array.py") == -1)
             {
                 WALBERLA_LOG_DEVEL_VAR("Error in Python script, exiting!")
@@ -483,6 +468,7 @@ int main(int argc, char* argv[])
             }
         }
     }    
+
     // Make sure that we finish the preprocessing before we continue
     MPI_Barrier(MPI_COMM_WORLD);
     nlohmann::json metaData_json;
@@ -522,9 +508,8 @@ int main(int argc, char* argv[])
     blockforest::communication::UniformBufferedScheme<Stencil_T> communication(blocks);
     communication.addPackInfo(make_shared< PackInfo_T >(pdfFieldId));
 
-    /// REMARK: never use write "timeloop.add() << Sweep(A) << Sweep(B);" (see merge request !486)
+    // Add the partial sweeps to the timeloop
     timeloop.add() << BeforeFunction(communication, "communication") << Sweep(noSlip);
-    //timeloop.add() << Sweep(simpleUBB);
     timeloop.add() << Sweep(dynamicUBB);
     timeloop.add() << Sweep(outflow);
     timeloop.add() << Sweep(cumulantMRTSweep);
@@ -534,7 +519,7 @@ int main(int argc, char* argv[])
                                  "remaining time logger");
     timeloop.addFuncAfterTimeStep(makeSharedFunctor(timeTracker), "time tracking");
 
-    // 
+    // This is a hack which forces the inflow boundary values to be determined at every timestep
     auto updateBdyValues = [&](){
         dynamicUBB.fillFromFlagField<FlagField_T>(blocks, flagFieldId, InflowUID, FluidFlagUID);
     };
@@ -553,13 +538,12 @@ int main(int argc, char* argv[])
         // Calculate the velocity at the center
         // We map the values to [0, 1) due to periodicity 
         centerVelocity = interpolater(std::fmod(time * dt, 1.0));
-        //std::cout << time * dt << " cV:" << centerVelocity << '\n';
     };
 
     timeloop.addFuncAfterTimeStep(updateNoiseValues, "update noise values");
     timeloop.addFuncAfterTimeStep(updateBdyValues, "update bdy values");
 
-    // set velocity in boundary cells to zero
+    // Set velocity in boundary cells to zero for better output
     auto zeroSetterFunction = [&](IBlock* block) {
         VectorField_T* velocityField   = block->getData< VectorField_T >(velocityFieldId);
         FlagField_T* flagField = block->getData< FlagField_T >(flagFieldId);
@@ -577,21 +561,18 @@ int main(int argc, char* argv[])
     timeloop.add() << Sweep(zeroSetterFunction, "Zerosetter");
     
     timeloop.addFuncAfterTimeStep(makeSharedFunctor(field::makeStabilityChecker<PdfField_T>(
-	blocks, velocityFieldId, parameters.stabilityCheckFrequency_)));
+	                                blocks, velocityFieldId, parameters.stabilityCheckFrequency_)));
 
     if (parameters.vtkWriteFrequency_ > 0)
     {
         std::string const path = "/mnt/data01/overmars/vtk_out/";
-        /// REMARK: force_pvtu must be set to true; otherwise the "pvti" format is used and paraview can only display
-        /// pvti files if the domain is partitioned in blocks with a block for EVERY part of the domain; this is likely
-        /// to be not the case when using smaller dx
         auto vtkOutput = vtk::createVTKOutput_BlockData(*blocks, "cumulant_mrt_velocity_field", parameters.vtkWriteFrequency_, 0,
                                                         true, path, "simulation_step", false, true, true, false, 0);
-	// Set the sampling size for the output
-	// The output size is divided by resolution in all directions
-	// So the final size is resolution^3 times smaller
-	constexpr double resolution = 2;
-	static_assert(resolution >= 1, "You probably want to have this number be at least 1");
+	    // Set the sampling size for the output
+	    // The output size is divided by resolution in all directions
+	    // So the final size is resolution^3 times smaller
+	    constexpr double resolution = 2;
+	    static_assert(resolution >= 1, "You probably want to have this number be at least 1");
         vtkOutput->setSamplingResolution(resolution);
 
         auto velWriter = make_shared< field::VTKWriter< VectorField_T > >(velocityFieldId, "Velocity");
@@ -607,5 +588,4 @@ int main(int argc, char* argv[])
     // write domain decomposition
     vtk::writeDomainDecomposition(blocks);
     timeloop.run();
-    //std::cout << "Test succesful\n";
 }
