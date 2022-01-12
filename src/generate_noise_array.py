@@ -3,12 +3,16 @@ sys.path.append("../../src/DRD_Wind/")
 import matplotlib.pyplot as plt
 import numpy as np
 import json
+from pathlib import Path
 from script.main_NoiseGenerator import generateNoise
 
 #import numba as nb
 import os
 
 def main():
+
+    Path("data").mkdir(parents=True, exist_ok=True)
+
     # read data
     with open('cellOutput.json') as data_file:
         cell_data = json.loads(data_file.read())
