@@ -24,6 +24,7 @@ struct Parameters
     real_t numHeartBeats_;
 
     std::string meshFileName_;
+    std::string vtkPathPrefix_;
     bool generateInflowProfile_;
 
     Parameters(real_t dx, uint_t timeSteps,
@@ -31,7 +32,7 @@ struct Parameters
                uint_t numConstNoises,
                Vector3<uint_t> cellsPerBlock, double remainingTimeLoggerFrequency,
                real_t numHeartBeats, std::string const& meshFileName, real_t omega,
-               bool generateInflowProfile, uint_t numConstInflow)
+               bool generateInflowProfile, uint_t numConstInflow, std::string vtkPathPrefix)
     :
         dx_(dx),
         omega_(omega),
@@ -44,6 +45,7 @@ struct Parameters
         remainingTimeLoggerFrequency_(remainingTimeLoggerFrequency),
         numHeartBeats_(numHeartBeats),
         meshFileName_(meshFileName),
+        vtkPathPrefix_(vtkPathPrefix),
         generateInflowProfile_(generateInflowProfile)
     {}
 };

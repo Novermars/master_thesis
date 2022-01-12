@@ -8,12 +8,13 @@ Parameters
     numConstInflow  300;
     VTKwriteFrequency 20;
     generateInflowProfile 0;
+    vtkPathPrefix vtk_out_test/;
 }
 
 DomainSetup
 {
-   meshFile         AN166_colored_aligned.obj;
-   dx               0.05;
+   meshFile         ../../Artery_Models/AN166_colored_aligned.obj;
+   dx               1;
    cellsPerBlock    < 16, 16, 16 >;
 }
 

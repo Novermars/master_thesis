@@ -292,8 +292,9 @@ Parameters constructParameters(std::shared_ptr<Config> config)
     const uint_t VTKwriteFrequency = parameters.getParameter< uint_t >("VTKwriteFrequency", 10);
     real_t numHeartBeats = parameters.getParameter<real_t>("numHeartBeatCycles", 1);
     uint_t numConstNoises = parameters.getParameter<uint_t>("numConstNoises", 100);
-    bool generateInflowProfile = parameters.getParameter<uint_t>("generateInflowProfile", 0) == 0;
+    bool generateInflowProfile = parameters.getParameter<bool>("generateInflowProfile", 0);
     uint_t numConstInflow = parameters.getParameter<uint_t>("numConstInflow", 10);
+    std::string vtkPrefixPath = parameters.getParameter< std::string >("vtkPathPrefix");
 
     // read domain parameters
     auto domainParameters = config->getOneBlock("DomainSetup");
@@ -306,7 +307,7 @@ Parameters constructParameters(std::shared_ptr<Config> config)
     uint_t stabilityChecker = stabilityCheckerParam.getParameter<uint_t>("StabilityChecker", 1000);
     return Parameters(dx, timesteps, VTKwriteFrequency, stabilityChecker, numConstNoises, cellsPerBlock,
                       remainingTimeLoggerFrequency, numHeartBeats, meshFile, omega, generateInflowProfile,
-                      numConstInflow);
+                      numConstInflow, vtkPrefixPath);
 }
 
 /* Loads the mesh from the file including the nonstandard vertex colors
@@ -355,6 +356,7 @@ int main(int argc, char* argv[])
     mpi::MPIManager::instance()->useWorldComm();
     auto config = walberlaEnv.config();
     auto parameters = constructParameters(config);
+    std::string vtkPathPrefix = parameters.vtkPathPrefix_;
     auto mesh = readAndColorMesh(parameters.meshFileName_);
 
     // REMARK: scale mesh with 1/dx
@@ -370,7 +372,7 @@ int main(int argc, char* argv[])
     // Let the root process write the calculated octree to a file
     WALBERLA_ROOT_SECTION()
     {
-        distanceOctree->writeVTKOutput("vtk_out/distanceOctree");
+        distanceOctree->writeVTKOutput(vtkPathPrefix + "distanceOctree");
     }
 
     // In this LBM simulation, we need three fields, which are very similar to (multi)dimensional arrays
@@ -562,14 +564,13 @@ int main(int argc, char* argv[])
         };
     timeloop.add() << Sweep(zeroSetterFunction, "Zerosetter");
     
-    timeloop.addFuncAfterTimeStep(makeSharedFunctor(field::makeStabilityChecker<PdfField_T>(
+    timeloop.addFuncAfterTimeStep(makeSharedFunctor(field::makeStabilityChecker<VectorField_T>(
 	                                blocks, velocityFieldId, parameters.stabilityCheckFrequency_)));
 
     if (parameters.vtkWriteFrequency_ > 0)
     {
-        std::string const path = "/mnt/data01/overmars/vtk_out/";
         auto vtkOutput = vtk::createVTKOutput_BlockData(*blocks, "cumulant_mrt_velocity_field", parameters.vtkWriteFrequency_, 0,
-                                                        true, path, "simulation_step", false, true, true, false, 0);
+                                                        true, vtkPathPrefix, "simulation_step", false, true, true, false, 0);
 	    // Set the sampling size for the output
 	    // The output size is divided by resolution in all directions
 	    // So the final size is resolution^3 times smaller
