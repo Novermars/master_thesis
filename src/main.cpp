@@ -470,7 +470,15 @@ int main(int argc, char* argv[])
                 MPI_Abort(MPI_COMM_WORLD, -1);
             }
         }
-    }    
+    }  
+    else 
+    {
+        WALBERLA_ROOT_SECTION()
+        {
+            WALBERLA_LOG_DEVEL("Not generating new noise profile!");
+            WALBERLA_LOG_DEVEL("If there are errors, make sure you generated a noise profile before!");
+        }
+    }
 
     // Make sure that we finish the preprocessing before we continue
     MPI_Barrier(MPI_COMM_WORLD);
